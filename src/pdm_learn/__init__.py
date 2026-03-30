@@ -20,6 +20,14 @@ from pdm_learn.preprocessing import (
     trim_pairs,
 )
 from pdm_learn.simulation import eps, partition
+from pdm_learn.simulation import (
+    build_heatmap_dataset,
+    build_metric_dataset,
+    clip_pair_to_centers,
+    iter_simulated_pairs,
+    perturb_pair,
+    standardize_pair,
+)
 
 
 __all__ = [
@@ -28,6 +36,9 @@ __all__ = [
     "LOOCV_grouped_plot",
     "area_table",
     "build_density_map",
+    "build_heatmap_dataset",
+    "build_metric_dataset",
+    "clip_pair_to_centers",
     "core_predict",
     "density_centers",
     "densitymap",
@@ -36,10 +47,13 @@ __all__ = [
     "extract",
     "heatmap",
     "importance_test",
+    "iter_simulated_pairs",
     "ks_pvalue",
     "mut_trim",
     "normalize",
     "partition",
+    "perturb_pair",
+    "standardize_pair",
     "trim",
     "trim_pairs",
 ]

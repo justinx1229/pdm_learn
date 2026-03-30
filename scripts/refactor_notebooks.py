@@ -78,7 +78,7 @@ SETUP_CELL_SOURCE = [
     "\n",
     "from pdm_learn.preprocessing import build_density_map, density_centers, densitymap, drop_nan, extract, mut_trim, normalize, trim, trim_pairs\n",
     "from pdm_learn.modeling import KFold_PR, LOOCV, LOOCV_grouped_plot, area_table, core_predict, heatmap, importance_test, ks_pvalue\n",
-    "from pdm_learn.simulation import eps, partition\n",
+    "from pdm_learn.simulation import build_heatmap_dataset, build_metric_dataset, eps, iter_simulated_pairs, partition, perturb_pair\n",
 ]
 
 SPECIAL_PATHS = {
