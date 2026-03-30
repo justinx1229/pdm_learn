@@ -1,0 +1,25 @@
+.DS_Store
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.python-version
+
+# Local environments and editor state
+.idea/
+.vscode/
+
+# Large local data and generated artifacts
+data/
+artifacts/controls/
+artifacts/results/
+*.pkl
+*.xlsx
+*.png
+
+# Python packaging
+build/
+dist/
+*.egg-info/
