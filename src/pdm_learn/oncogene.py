@@ -530,7 +530,7 @@ def save_oncogene_feature_tables(
 def load_oncogene_feature_sets(
     data_dir: str | Path,
     *,
-    density_name: str = "dataset_trimmed_v3.csv",
+    density_name: str = "dataset_trimmed_new.csv",
     pearson_name: str = "pearson.csv",
     spearman_name: str = "spearman.csv",
     mi_name: str = "mi.csv",
