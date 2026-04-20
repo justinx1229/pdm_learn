@@ -243,7 +243,12 @@ def compute_mutual_information(
     )
 
 
-def bicor(x: Sequence[float], y: Sequence[float], c: float = 9.0) -> float:
+def bicor(
+    x: Sequence[float],
+    y: Sequence[float],
+    c: float = 9.0,
+    epsilon: float = 1e-9,
+) -> float:
     x_array = np.asarray(x, dtype=float)
     y_array = np.asarray(y, dtype=float)
     mask = np.isfinite(x_array) & np.isfinite(y_array)
@@ -257,8 +262,8 @@ def bicor(x: Sequence[float], y: Sequence[float], c: float = 9.0) -> float:
     y_med = np.median(y_array)
     x_mad = np.median(np.abs(x_array - x_med))
     y_mad = np.median(np.abs(y_array - y_med))
-    if x_mad == 0 or y_mad == 0:
-        return float("nan")
+    x_mad = max(float(x_mad), epsilon)
+    y_mad = max(float(y_mad), epsilon)
 
     ux = (x_array - x_med) / (c * x_mad)
     uy = (y_array - y_med) / (c * y_mad)
@@ -271,8 +276,7 @@ def bicor(x: Sequence[float], y: Sequence[float], c: float = 9.0) -> float:
     y_weighted = (y_array - y_med) * wy
     numerator = np.sum(x_weighted * y_weighted)
     denominator = np.sqrt(np.sum(x_weighted**2) * np.sum(y_weighted**2))
-    if denominator == 0:
-        return float("nan")
+    denominator = max(float(denominator), epsilon)
     return float(numerator / denominator)
 
 
@@ -308,10 +312,9 @@ def build_oncogene_density_features(
         else:
             df1_t, df2_t = _trim_pair_dataframes(datasets[left_name], datasets[right_name])
 
-        left_rows = _row_lookup(df1_t)
-        right_rows = _row_lookup(df2_t)
-
         if is_mut and is_cn:
+            left_rows = _row_lookup(df1_t)
+            right_rows = _row_lookup(df2_t)
             for gene_name in df2_t.iloc[:, 0]:
                 x = _extract_density_values(left_rows[gene_name], cutoff=False)
                 y = _extract_density_values(right_rows[gene_name], cutoff=False)
@@ -327,6 +330,8 @@ def build_oncogene_density_features(
                 temp.iloc[gene_index[gene_name]] = matrix.flatten()
         elif is_mut:
             df2_t = _normalize_rows(df2_t)
+            left_rows = _row_lookup(df1_t)
+            right_rows = _row_lookup(df2_t)
             sigma = float(np.nanstd(df2_t.iloc[:, 1:].to_numpy(dtype=float)))
             if not np.isfinite(sigma) or sigma == 0:
                 sigma = 1.0
@@ -351,6 +356,8 @@ def build_oncogene_density_features(
                 temp.iloc[gene_index[gene_name]] = matrix.flatten()
         elif is_cn:
             df1_t = _normalize_rows(df1_t)
+            left_rows = _row_lookup(df1_t)
+            right_rows = _row_lookup(df2_t)
             sigma = float(np.nanstd(df1_t.iloc[:, 1:].to_numpy(dtype=float)))
             if not np.isfinite(sigma) or sigma == 0:
                 sigma = 1.0
@@ -376,6 +383,8 @@ def build_oncogene_density_features(
         else:
             df1_t = _normalize_rows(df1_t)
             df2_t = _normalize_rows(df2_t)
+            left_rows = _row_lookup(df1_t)
+            right_rows = _row_lookup(df2_t)
             x_std = float(np.nanstd(df1_t.iloc[:, 1:].to_numpy(dtype=float)))
             y_std = float(np.nanstd(df2_t.iloc[:, 1:].to_numpy(dtype=float)))
             sigma = float(
@@ -589,7 +598,7 @@ def evaluate_method_curves(
     *,
     trials: int,
     model: str = "XGB",
-    ks_test: bool = False,
+    ks_test: bool | Mapping[str, bool] = False,
     features_left: int | Mapping[str, int | None] | None = None,
     metric: str = "pr",
 ) -> dict[str, tuple[float, np.ndarray, np.ndarray]]:
@@ -600,6 +609,7 @@ def evaluate_method_curves(
             if isinstance(features_left, Mapping)
             else features_left
         )
+        use_ks_test = ks_test.get(name, False) if isinstance(ks_test, Mapping) else ks_test
         pos_values = positive.iloc[:, 1:].to_numpy()
         neg_values = negative.iloc[:, 1:].to_numpy()
         if metric == "pr":
@@ -608,7 +618,7 @@ def evaluate_method_curves(
                 neg_values,
                 trials,
                 model=model,
-                ks_test=ks_test,
+                ks_test=use_ks_test,
                 features_left=feature_limit,
             )
         elif metric == "loocv":
@@ -617,7 +627,7 @@ def evaluate_method_curves(
                 neg_values,
                 trials,
                 model=model,
-                ks_test=ks_test,
+                ks_test=use_ks_test,
                 features_left=feature_limit,
                 equation=True,
             )

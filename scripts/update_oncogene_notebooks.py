@@ -176,8 +176,9 @@ input_data.head()
         """
 MODEL_LIST = ("SVR", "XGB", "GBR", "MLP", "LR", "GNB")
 DEFAULT_MODEL = "XGB"
+KS_TEST_BY_METHOD = {"PDM": True}
 
-MODEL_LIST
+MODEL_LIST, KS_TEST_BY_METHOD
 """
     ),
     _code_cell(
@@ -198,6 +199,7 @@ LOOCV_grouped_plot(
     data_dict,
     5,
     models=MODEL_LIST,
+    ks_test=KS_TEST_BY_METHOD,
 )
 """
     ),
@@ -207,7 +209,7 @@ pr_results = evaluate_method_curves(
     data_dict,
     trials=25,
     model=DEFAULT_MODEL,
-    ks_test=False,
+    ks_test=KS_TEST_BY_METHOD,
     metric="pr",
 )
 plot_method_curves(
@@ -225,7 +227,7 @@ loocv_results = evaluate_method_curves(
     data_dict,
     trials=25,
     model=DEFAULT_MODEL,
-    ks_test=False,
+    ks_test=KS_TEST_BY_METHOD,
     metric="loocv",
 )
 plot_method_curves(

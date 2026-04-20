@@ -131,19 +131,31 @@ def _select_features_with_ks_test(
     features_left: int | None,
 ) -> tuple[np.ndarray, np.ndarray]:
     if features_left is None:
-        features_left = 2 * len(positive)
-    features_left = max(1, min(features_left, positive.shape[1]))
+        features_left = len(positive)
 
-    p_val = []
-    for j in range(0, len(positive[0]) - 1):
-        _, p_value = stats.kstest(positive[:, j], negative[:, j])
-        p_val.append(p_value)
+    try:
+        features_left = max(1, min(features_left, positive.shape[1]))
+
+        p_val = []
+        for j in range(0, len(positive[0]) - 1):
+            _, p_value = stats.kstest(positive[:, j], negative[:, j])
+            p_val.append(p_value)
+    except Exception:
+        return positive, negative
 
     if not p_val or features_left >= len(p_val):
         return positive, negative
 
     drop_ind = np.argpartition(p_val, features_left - 1)[features_left:]
-    return np.delete(positive, drop_ind, axis=1), np.delete(negative, drop_ind, axis=1)
+    try:
+        filtered_positive = np.delete(positive, drop_ind, axis=1)
+        filtered_negative = np.delete(negative, drop_ind, axis=1)
+    except Exception:
+        return positive, negative
+
+    if filtered_positive.shape[1] == 0 or filtered_negative.shape[1] == 0:
+        return positive, negative
+    return filtered_positive, filtered_negative
 
 
 def core_predict(
@@ -253,7 +265,7 @@ def LOOCV_grouped_plot(
     data_dict: Mapping[str, tuple[Sequence[Sequence[float]], Sequence[Sequence[float]]]],
     trials: int,
     models: Sequence[str] = ("SVR", "XGB", "GBR", "MLP", "LR", "GNB"),
-    ks_test: bool = False,
+    ks_test: bool | Mapping[str, bool] = False,
     features_left: int | None = None,
     figsize: tuple[int, int] = (14, 8),
 ) -> np.ndarray:
@@ -280,12 +292,13 @@ def LOOCV_grouped_plot(
         for j, model in enumerate(models):
             print(f"Running {method} - {model}")
             try:
+                use_ks_test = ks_test.get(method, False) if isinstance(ks_test, Mapping) else ks_test
                 results[i, j] = LOOCV(
                     positive_values,
                     negative_values,
                     trials,
                     model=model,
-                    ks_test=ks_test,
+                    ks_test=use_ks_test,
                     features_left=features_left,
                     graph=False,
                 )
