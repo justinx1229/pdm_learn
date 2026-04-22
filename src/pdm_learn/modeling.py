@@ -4,12 +4,17 @@ from collections.abc import Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy import stats
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from sklearn.model_selection import StratifiedKFold
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
 
@@ -29,20 +34,95 @@ def _validate_inputs(positive: np.ndarray, negative: np.ndarray, trials: int) ->
     return None
 
 
+def _normalize_model_name(model: str) -> str:
+    key = model.upper().replace(" ", "").replace("-", "").replace("_", "")
+    aliases = {
+        "SVR": "SVR",
+        "GBR": "GBR",
+        "GRADIENTBOOSTEDREGRESSION": "GBR",
+        "XGB": "XGB",
+        "XGBOOST": "XGB",
+        "MLP": "MLP",
+        "MULTILAYEREDPERCEPTRON": "MLP",
+        "LR": "LR",
+        "LOGISTICREGRESSION": "LR",
+        "GNB": "GNB",
+        "GAUSSIANNB": "GNB",
+        "GAUSSIANNAIVEBAYES": "GNB",
+        "DTR": "DTR",
+        "DECISIONTREEREGRESSOR": "DTR",
+    }
+    return aliases.get(key, model)
+
+
 def _build_predictor(model: str):
-    if model == "SVR":
-        return SVR()
-    if model == "GBR":
-        return GradientBoostingRegressor()
-    if model == "XGB":
+    model_name = _normalize_model_name(model)
+    if model_name == "SVR":
+        return make_pipeline(StandardScaler(), SVR())
+    if model_name == "GBR":
+        return GradientBoostingRegressor(random_state=42)
+    if model_name == "XGB":
         if xgb is None:
             raise ImportError("xgboost is required when model='XGB'")
-        return xgb.XGBRegressor()
-    if model == "DTR":
-        return DecisionTreeRegressor()
-    if model == "LR":
-        return LogisticRegression(max_iter=1000)
+        return xgb.XGBClassifier(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=4,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            eval_metric="logloss",
+            verbosity=0,
+        )
+    if model_name == "MLP":
+        return make_pipeline(
+            StandardScaler(),
+            MLPClassifier(
+                hidden_layer_sizes=(100, 50),
+                max_iter=2000,
+                early_stopping=False,
+                random_state=42,
+            ),
+        )
+    if model_name == "LR":
+        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=42))
+    if model_name == "GNB":
+        return GaussianNB()
+    if model_name == "DTR":
+        return DecisionTreeRegressor(random_state=42)
     raise ValueError(f"Unsupported model: {model}")
+
+
+def _predict_scores(predictor, X: np.ndarray) -> np.ndarray:
+    if hasattr(predictor, "predict_proba"):
+        probabilities = predictor.predict_proba(X)
+        if probabilities.ndim == 2:
+            classes = getattr(predictor, "classes_", None)
+            if classes is not None:
+                positive_matches = np.where(np.asarray(classes) == 1)[0]
+                if len(positive_matches):
+                    return probabilities[:, positive_matches[0]]
+            return probabilities[:, -1]
+        return np.asarray(probabilities, dtype=float)
+    if hasattr(predictor, "decision_function"):
+        return np.asarray(predictor.decision_function(X), dtype=float)
+    return np.asarray(predictor.predict(X), dtype=float)
+
+
+def _coerce_feature_matrix(data: Sequence[Sequence[float]]) -> np.ndarray:
+    if isinstance(data, pd.DataFrame):
+        feature_frame = data
+        if feature_frame.shape[1] > 1 and not pd.api.types.is_numeric_dtype(feature_frame.dtypes.iloc[0]):
+            feature_frame = feature_frame.iloc[:, 1:]
+        return feature_frame.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+
+    array = np.asarray(data)
+    if array.ndim == 2 and array.shape[1] > 1 and not np.issubdtype(array.dtype, np.number):
+        try:
+            return np.asarray(array[:, 1:], dtype=float)
+        except (TypeError, ValueError):
+            return pd.DataFrame(array[:, 1:]).apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    return np.asarray(array, dtype=float)
 
 
 def _select_features_with_ks_test(
@@ -51,19 +131,31 @@ def _select_features_with_ks_test(
     features_left: int | None,
 ) -> tuple[np.ndarray, np.ndarray]:
     if features_left is None:
-        features_left = 2 * len(positive)
-    features_left = max(1, min(features_left, positive.shape[1]))
+        features_left = len(positive)
 
-    p_val = []
-    for j in range(0, len(positive[0]) - 1):
-        _, p_value = stats.kstest(positive[:, j], negative[:, j])
-        p_val.append(p_value)
+    try:
+        features_left = max(1, min(features_left, positive.shape[1]))
+
+        p_val = []
+        for j in range(0, len(positive[0]) - 1):
+            _, p_value = stats.kstest(positive[:, j], negative[:, j])
+            p_val.append(p_value)
+    except Exception:
+        return positive, negative
 
     if not p_val or features_left >= len(p_val):
         return positive, negative
 
     drop_ind = np.argpartition(p_val, features_left - 1)[features_left:]
-    return np.delete(positive, drop_ind, axis=1), np.delete(negative, drop_ind, axis=1)
+    try:
+        filtered_positive = np.delete(positive, drop_ind, axis=1)
+        filtered_negative = np.delete(negative, drop_ind, axis=1)
+    except Exception:
+        return positive, negative
+
+    if filtered_positive.shape[1] == 0 or filtered_negative.shape[1] == 0:
+        return positive, negative
+    return filtered_positive, filtered_negative
 
 
 def core_predict(
@@ -109,7 +201,7 @@ def core_predict(
 
         predictor = _build_predictor(model).fit(X, y)
         neg_test = np.delete(neg, range(index, index + size), axis=0)
-        for row_index, value in enumerate(predictor.predict(neg_test[:, 1:-1])):
+        for row_index, value in enumerate(_predict_scores(predictor, neg_test[:, 1:-1])):
             scores[int(neg_test[row_index, 0])] += value
             number[int(neg_test[row_index, 0])] += 1
 
@@ -172,30 +264,49 @@ def LOOCV(
 def LOOCV_grouped_plot(
     data_dict: Mapping[str, tuple[Sequence[Sequence[float]], Sequence[Sequence[float]]]],
     trials: int,
-    models: Sequence[str] = ("SVR", "XGB", "GBR", "DTR", "LR"),
-    ks_test: bool = False,
+    models: Sequence[str] = ("SVR", "XGB", "GBR", "MLP", "LR", "GNB"),
+    ks_test: bool | Mapping[str, bool] = False,
     features_left: int | None = None,
     figsize: tuple[int, int] = (14, 8),
 ) -> np.ndarray:
     methods = list(data_dict.keys())
     results = np.zeros((len(methods), len(models)))
+    results[:] = np.nan
 
     for i, method in enumerate(methods):
         positive, negative = data_dict[method]
+        positive_values = _coerce_feature_matrix(positive)
+        negative_values = _coerce_feature_matrix(negative)
+
+        if (
+            positive_values.ndim != 2
+            or negative_values.ndim != 2
+            or len(positive_values) == 0
+            or len(negative_values) == 0
+            or positive_values.shape[1] == 0
+            or negative_values.shape[1] == 0
+        ):
+            print(f"Skipping {method}: insufficient usable feature data")
+            continue
+
         for j, model in enumerate(models):
             print(f"Running {method} - {model}")
-            results[i, j] = LOOCV(
-                positive,
-                negative,
-                trials,
-                model=model,
-                ks_test=ks_test,
-                features_left=features_left,
-                graph=False,
-            )
+            try:
+                use_ks_test = ks_test.get(method, False) if isinstance(ks_test, Mapping) else ks_test
+                results[i, j] = LOOCV(
+                    positive_values,
+                    negative_values,
+                    trials,
+                    model=model,
+                    ks_test=use_ks_test,
+                    features_left=features_left,
+                    graph=False,
+                )
+            except Exception as exc:
+                print(f"Skipping {method} - {model}: {exc}")
 
     x = np.arange(len(methods))
-    width = 0.15
+    width = 0.8 / max(len(models), 1)
     plt.figure(figsize=figsize)
 
     for j, model in enumerate(models):
@@ -205,7 +316,7 @@ def LOOCV_grouped_plot(
     plt.ylabel("LOOCV AUC")
     plt.title("LOOCV AUC by Data Conversion Method and Model")
     plt.legend()
-    plt.ylim(0, 1)
+    plt.ylim(0.5, 1)
     plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
     plt.show()
