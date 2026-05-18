@@ -351,25 +351,31 @@ def KFold_PR(
         X_test = X[test_idx]
         y_test = y[test_idx]
 
-        pos_train = X_train[y_train == 1]
-        neg_train = X_train[y_train == 0]
-        pos_test = X_test[y_test == 1]
-        neg_test = X_test[y_test == 0]
+        if ks_test:
+            try:
+                pos_train = X_train[y_train == 1]
+                neg_train = X_train[y_train == 0]
+                selected_features = min(
+                    features_left if features_left is not None else len(pos_train),
+                    X_train.shape[1],
+                )
+                selected_features = max(1, selected_features)
+                p_values = [
+                    stats.kstest(pos_train[:, feature_index], neg_train[:, feature_index]).pvalue
+                    for feature_index in range(X_train.shape[1])
+                ]
+                if selected_features < len(p_values):
+                    keep_indices = np.argpartition(p_values, selected_features - 1)[:selected_features]
+                    keep_indices = np.sort(keep_indices)
+                    X_train = X_train[:, keep_indices]
+                    X_test = X_test[:, keep_indices]
+            except Exception:
+                pass
 
-        combined_test = np.vstack([neg_test, pos_test])
-        scores = core_predict(
-            pos_train,
-            np.vstack([neg_train, combined_test]),
-            trials,
-            model=model,
-            ks_test=ks_test,
-            features_left=features_left,
-        )
-
-        test_scores = scores[len(neg_train) :]
-        test_labels = np.concatenate([np.zeros(len(neg_test)), np.ones(len(pos_test))])
+        predictor = _build_predictor(model).fit(X_train, y_train)
+        test_scores = _predict_scores(predictor, X_test)
         all_scores.extend(test_scores)
-        all_true.extend(test_labels)
+        all_true.extend(y_test)
 
     all_scores = np.array(all_scores)
     all_true = np.array(all_true)
