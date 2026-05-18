@@ -6,6 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from scipy import stats
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.metrics import mutual_info_score
@@ -644,14 +645,36 @@ def plot_method_curves(
     xlabel: str,
     ylabel: str,
 ) -> None:
-    style_cycle = ["-", "--", ":", "-."]
+    sns.set_theme(
+        style="whitegrid",
+        context="paper",
+        font_scale=1.2,
+        rc={
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.titleweight": "semibold",
+            "figure.dpi": 120,
+            "savefig.dpi": 300,
+            "grid.alpha": 0.2,
+            "grid.linestyle": "--",
+        },
+    )
+    palette = sns.color_palette("colorblind", n_colors=max(len(results), 1))
+    style_cycle = ["solid", "dashed", "dotted", "dashdot"]
     plt.figure(figsize=(8, 5))
     for index, (name, (area, x_values, y_values)) in enumerate(results.items()):
-        linestyle = style_cycle[index % len(style_cycle)]
-        plt.plot(x_values, y_values, label=f"{name}: ({area:.3f})", linestyle=linestyle)
+        sns.lineplot(
+            x=x_values,
+            y=y_values,
+            label=f"{name} ({area:.3f})",
+            linewidth=2.2,
+            linestyle=style_cycle[index % len(style_cycle)],
+            color=palette[index % len(palette)],
+        )
     plt.title(title)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
-    plt.legend()
+    plt.legend(title="", frameon=False)
+    sns.despine()
     plt.tight_layout()
     plt.show()

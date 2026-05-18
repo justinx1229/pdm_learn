@@ -160,6 +160,9 @@ def build_density_map(
             mask[0] = True
             df2 = df2.loc[:, mask]
 
+            df1_genes = set(df1.iloc[:, 0].astype(str).str.strip())
+            df2_genes = set(df2.iloc[:, 0].astype(str).str.strip())
+
             df1_pts = density_points[i]
             df2_pts = density_points[j]
             df1_cont = continuous[i]
@@ -167,11 +170,12 @@ def build_density_map(
 
             feature_prefix_1 = getattr(datasets[i], "name", f"dataset_{i}")
             feature_prefix_2 = getattr(datasets[j], "name", f"dataset_{j}")
+            feature_count = len(df1_pts) * len(df2_pts)
             temp = pd.DataFrame(
                 index=range(len(output)),
                 columns=[
                     f"{feature_prefix_1}.{feature_prefix_2}.{value}"
-                    for value in range(len(df1_pts) * len(df2_pts))
+                    for value in range(feature_count)
                 ],
             )
 
@@ -189,12 +193,24 @@ def build_density_map(
             else:
                 std = np.nanstd(df2.iloc[:, 1:].to_numpy())
 
+            nan_features = np.full(feature_count, np.nan, dtype=float)
+
             for index, (p1, p2) in enumerate(pairs):
+                p1 = str(p1).strip()
+                p2 = str(p2).strip()
+                if p1 not in df1_genes or p2 not in df2_genes:
+                    temp.iloc[index] = nan_features
+                    continue
+
                 x = extract(df1, p1)
                 y = extract(df2, p2)
                 if isinstance(x, int) or isinstance(y, int):
+                    temp.iloc[index] = nan_features
                     continue
                 x, y = drop_nan(x, y)
+                if len(x) == 0 or len(y) == 0:
+                    temp.iloc[index] = nan_features
+                    continue
                 matrix = densitymap(
                     x,
                     y,
@@ -204,6 +220,9 @@ def build_density_map(
                     ydiscrete=not df2_cont,
                     sigma=std,
                 )
+                if isinstance(matrix, str):
+                    temp.iloc[index] = nan_features
+                    continue
                 temp.iloc[index] = matrix.flatten()
 
             temp = temp.astype(float)

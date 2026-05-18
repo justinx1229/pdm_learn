@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from scipy import stats
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.inspection import permutation_importance
@@ -22,6 +23,28 @@ try:
     import xgboost as xgb
 except ImportError:  # pragma: no cover
     xgb = None
+
+
+def _set_publication_theme() -> None:
+    sns.set_theme(
+        style="whitegrid",
+        context="paper",
+        font_scale=1.2,
+        rc={
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.titleweight": "semibold",
+            "figure.dpi": 120,
+            "savefig.dpi": 300,
+            "grid.alpha": 0.2,
+            "grid.linestyle": "--",
+        },
+    )
+
+
+def _method_palette(names: Sequence[str]) -> dict[str, tuple[float, float, float]]:
+    palette = sns.color_palette("colorblind", n_colors=max(len(names), 1))
+    return {name: palette[index] for index, name in enumerate(names)}
 
 
 def _validate_inputs(positive: np.ndarray, negative: np.ndarray, trials: int) -> str | None:
@@ -252,8 +275,14 @@ def LOOCV(
     area = np.sum(cumulative) / (len(positive_array) * (len(negative_array) + 1))
 
     if graph:
-        plt.title("area = " + str(area))
-        plt.step(base[:-1], cumulative, where="post")
+        _set_publication_theme()
+        plt.figure(figsize=(6.5, 4.2))
+        plt.step(base[:-1], cumulative, where="post", linewidth=2.2, color=sns.color_palette("deep")[0])
+        plt.title(f"LOOCV Curve (Area = {area:.3f})")
+        plt.xlabel("Rank Threshold")
+        plt.ylabel("Recovered Positives")
+        sns.despine()
+        plt.tight_layout()
         plt.show()
 
     if equation:
@@ -306,18 +335,26 @@ def LOOCV_grouped_plot(
                 print(f"Skipping {method} - {model}: {exc}")
 
     x = np.arange(len(methods))
-    width = 0.8 / max(len(models), 1)
+    plot_df = pd.DataFrame(results, index=methods, columns=models).reset_index(names="Method")
+    plot_df = plot_df.melt(id_vars="Method", var_name="Model", value_name="LOOCV AUC")
+
+    _set_publication_theme()
     plt.figure(figsize=figsize)
-
-    for j, model in enumerate(models):
-        plt.bar(x + j * width, results[:, j], width, label=model)
-
-    plt.xticks(x + width * (len(models) - 1) / 2, methods)
-    plt.ylabel("LOOCV AUC")
-    plt.title("LOOCV AUC by Data Conversion Method and Model")
-    plt.legend()
-    plt.ylim(0.5, 1)
-    plt.grid(axis="y", linestyle="--", alpha=0.5)
+    ax = sns.barplot(
+        data=plot_df,
+        x="Method",
+        y="LOOCV AUC",
+        hue="Model",
+        palette="colorblind",
+        errorbar=None,
+    )
+    ax.set_ylabel("LOOCV AUC")
+    ax.set_xlabel("")
+    ax.set_title("LOOCV Performance by Data Conversion Method")
+    ax.set_ylim(0.5, 1)
+    plt.xticks(rotation=20, ha="right")
+    ax.legend(title="Model", frameon=False, ncol=min(3, len(models)))
+    sns.despine()
     plt.tight_layout()
     plt.show()
 
@@ -384,11 +421,14 @@ def KFold_PR(
     average_precision = average_precision_score(all_true, all_scores)
 
     if graph:
-        plt.figure()
-        plt.plot(recall, precision)
+        _set_publication_theme()
+        plt.figure(figsize=(6, 4.5))
+        sns.lineplot(x=recall, y=precision, linewidth=2.2, color=sns.color_palette("deep")[0])
         plt.xlabel("Recall")
         plt.ylabel("Precision")
-        plt.title(f"PR Curve (AP = {average_precision:.4f})")
+        plt.title(f"Precision-Recall Curve (AP = {average_precision:.3f})")
+        sns.despine()
+        plt.tight_layout()
         plt.show()
 
     return average_precision, recall, precision
@@ -432,19 +472,29 @@ def heatmap(
     axes: bool = False,
     colorbar: bool = False,
 ) -> None:
+    _set_publication_theme()
     index = 0
     for dim in dimensions:
         matrix = np.reshape(data[index : index + dim[0] * dim[1]], (dim[0], dim[1]))
         if flip:
             matrix = np.flip(matrix, 0)
+        plt.figure(figsize=(4.6, 3.8))
+        heatmap_kwargs = {
+            "cmap": cmap,
+            "cbar": colorbar,
+            "square": False,
+            "xticklabels": axes,
+            "yticklabels": axes,
+        }
         if min is not None and max is not None:
-            image = plt.imshow(matrix, cmap=cmap, interpolation="nearest", vmin=min, vmax=max)
-        else:
-            image = plt.imshow(matrix, cmap=cmap, interpolation="nearest")
-        if colorbar:
-            plt.colorbar(image)
+            heatmap_kwargs["vmin"] = min
+            heatmap_kwargs["vmax"] = max
+        ax = sns.heatmap(matrix, **heatmap_kwargs)
         if not axes:
-            plt.axis("off")
+            ax.set_xticks([])
+            ax.set_yticks([])
+        sns.despine(left=not axes, bottom=not axes)
+        plt.tight_layout()
         plt.show()
         index += dim[0] * dim[1]
 
@@ -506,7 +556,13 @@ def importance_test(
             random_state=trial_index,
         )
         importance = results.importances_mean
-        plt.bar([value for value in range(len(importance))], importance)
+        _set_publication_theme()
+        plt.figure(figsize=(7, 4))
+        sns.barplot(x=[value for value in range(len(importance))], y=importance, color=sns.color_palette("deep")[0], errorbar=None)
+        plt.xlabel("Feature Index")
+        plt.ylabel("Permutation Importance")
+        sns.despine()
+        plt.tight_layout()
         plt.show()
         out.append(importance)
 
