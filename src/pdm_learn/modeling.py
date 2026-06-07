@@ -10,7 +10,7 @@ from scipy import stats
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score, roc_curve
 from sklearn.model_selection import StratifiedKFold
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neural_network import MLPClassifier
@@ -348,9 +348,9 @@ def LOOCV_grouped_plot(
         palette="colorblind",
         errorbar=None,
     )
-    ax.set_ylabel("LOOCV AUC")
+    ax.set_ylabel("LOOCV Area")
     ax.set_xlabel("")
-    ax.set_title("LOOCV Performance by Data Conversion Method")
+    ax.set_title("LOOCV Rank-Recovery Area by Data Conversion Method")
     ax.set_ylim(0.5, 1)
     plt.xticks(rotation=20, ha="right")
     ax.legend(title="Model", frameon=False, ncol=min(3, len(models)))
@@ -359,6 +359,150 @@ def LOOCV_grouped_plot(
     plt.show()
 
     return results
+
+
+def KFold_ROC_AUC_grouped_plot(
+    data_dict: Mapping[str, tuple[Sequence[Sequence[float]], Sequence[Sequence[float]]]],
+    models: Sequence[str] = ("SVR", "XGB", "GBR", "MLP", "LR", "GNB"),
+    ks_test: bool | Mapping[str, bool] = False,
+    features_left: int | None = None,
+    n_splits: int = 5,
+    figsize: tuple[int, int] = (14, 8),
+    random_state: int = 42,
+) -> np.ndarray:
+    methods = list(data_dict.keys())
+    results = np.zeros((len(methods), len(models)))
+    results[:] = np.nan
+
+    for i, method in enumerate(methods):
+        positive, negative = data_dict[method]
+        positive_values = _coerce_feature_matrix(positive)
+        negative_values = _coerce_feature_matrix(negative)
+
+        if (
+            positive_values.ndim != 2
+            or negative_values.ndim != 2
+            or len(positive_values) == 0
+            or len(negative_values) == 0
+            or positive_values.shape[1] == 0
+            or negative_values.shape[1] == 0
+        ):
+            print(f"Skipping {method}: insufficient usable feature data")
+            continue
+
+        for j, model in enumerate(models):
+            print(f"Running {method} - {model}")
+            try:
+                use_ks_test = ks_test.get(method, False) if isinstance(ks_test, Mapping) else ks_test
+                results[i, j] = KFold_ROC_AUC(
+                    positive_values,
+                    negative_values,
+                    model=model,
+                    ks_test=use_ks_test,
+                    features_left=features_left,
+                    n_splits=n_splits,
+                    graph=False,
+                    random_state=random_state,
+                )
+            except Exception as exc:
+                print(f"Skipping {method} - {model}: {exc}")
+
+    plot_df = pd.DataFrame(results, index=methods, columns=models).reset_index(names="Method")
+    plot_df = plot_df.melt(id_vars="Method", var_name="Model", value_name="ROC AUC")
+
+    _set_publication_theme()
+    plt.figure(figsize=figsize)
+    ax = sns.barplot(
+        data=plot_df,
+        x="Method",
+        y="ROC AUC",
+        hue="Model",
+        palette="colorblind",
+        errorbar=None,
+    )
+    ax.set_ylabel("ROC AUC")
+    ax.set_xlabel("")
+    ax.set_title("Cross-Validated ROC AUC by Data Conversion Method")
+    ax.set_ylim(0.45, 1)
+    plt.xticks(rotation=20, ha="right")
+    ax.legend(title="Model", frameon=False, ncol=min(3, len(models)))
+    sns.despine()
+    plt.tight_layout()
+    plt.show()
+
+    return results
+
+
+def KFold_ROC_AUC(
+    positive: Sequence[Sequence[float]],
+    negative: Sequence[Sequence[float]],
+    model: str = "GBR",
+    ks_test: bool = False,
+    features_left: int | None = None,
+    n_splits: int = 5,
+    graph: bool = False,
+    random_state: int = 42,
+):
+    positive_array = np.asarray(positive)
+    negative_array = np.asarray(negative)
+
+    X = np.vstack([positive_array, negative_array])
+    y = np.concatenate([np.ones(len(positive_array)), np.zeros(len(negative_array))])
+
+    splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    all_scores = []
+    all_true = []
+
+    for train_idx, test_idx in splitter.split(X, y):
+        X_train = X[train_idx]
+        y_train = y[train_idx]
+        X_test = X[test_idx]
+        y_test = y[test_idx]
+
+        if ks_test:
+            try:
+                pos_train = X_train[y_train == 1]
+                neg_train = X_train[y_train == 0]
+                selected_features = min(
+                    features_left if features_left is not None else len(pos_train),
+                    X_train.shape[1],
+                )
+                selected_features = max(1, selected_features)
+                p_values = [
+                    stats.kstest(pos_train[:, feature_index], neg_train[:, feature_index]).pvalue
+                    for feature_index in range(X_train.shape[1])
+                ]
+                if selected_features < len(p_values):
+                    keep_indices = np.argpartition(p_values, selected_features - 1)[:selected_features]
+                    keep_indices = np.sort(keep_indices)
+                    X_train = X_train[:, keep_indices]
+                    X_test = X_test[:, keep_indices]
+            except Exception:
+                pass
+
+        predictor = _build_predictor(model).fit(X_train, y_train)
+        test_scores = _predict_scores(predictor, X_test)
+        all_scores.extend(test_scores)
+        all_true.extend(y_test)
+
+    all_scores = np.asarray(all_scores)
+    all_true = np.asarray(all_true)
+    auc = roc_auc_score(all_true, all_scores)
+
+    if graph:
+        fpr, tpr, _ = roc_curve(all_true, all_scores)
+        _set_publication_theme()
+        plt.figure(figsize=(6, 4.5))
+        sns.lineplot(x=fpr, y=tpr, linewidth=2.2, color=sns.color_palette("deep")[0])
+        plt.plot([0, 1], [0, 1], linestyle="--", color="0.5", linewidth=1.2)
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title(f"ROC Curve (AUC = {auc:.3f})")
+        sns.despine()
+        plt.tight_layout()
+        plt.show()
+
+    return auc
 
 
 def KFold_PR(

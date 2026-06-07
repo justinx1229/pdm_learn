@@ -85,6 +85,27 @@ def iter_simulated_pairs(
             )
 
 
+def collect_simulated_pairs(
+    positive: pd.DataFrame,
+    *,
+    repeats: int,
+    epsilon_std: float,
+    shuffle_y: bool = False,
+    centers: Iterable[float] | None = None,
+    rng: np.random.Generator | None = None,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    return list(
+        iter_simulated_pairs(
+            positive,
+            repeats=repeats,
+            epsilon_std=epsilon_std,
+            shuffle_y=shuffle_y,
+            centers=centers,
+            rng=rng,
+        )
+    )
+
+
 def build_metric_dataset(
     positive: pd.DataFrame,
     metric_fn: Callable[[np.ndarray, np.ndarray], float],
@@ -95,10 +116,12 @@ def build_metric_dataset(
     column_name: str | None = None,
     centers: Iterable[float] | None = None,
     rng: np.random.Generator | None = None,
+    simulated_pairs: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> pd.DataFrame:
-    values = [
-        metric_fn(x, y)
-        for x, y in iter_simulated_pairs(
+    pairs = (
+        simulated_pairs
+        if simulated_pairs is not None
+        else iter_simulated_pairs(
             positive,
             repeats=repeats,
             epsilon_std=epsilon_std,
@@ -106,6 +129,10 @@ def build_metric_dataset(
             centers=centers,
             rng=rng,
         )
+    )
+    values = [
+        metric_fn(x, y)
+        for x, y in pairs
     ]
     if column_name is None:
         return pd.DataFrame(values)
@@ -123,11 +150,13 @@ def build_heatmap_dataset(
     shuffle_y: bool = False,
     log_offset: float | None = None,
     rng: np.random.Generator | None = None,
+    simulated_pairs: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> pd.DataFrame:
     centers_array = np.asarray(list(centers), dtype=float)
-    rows = [
-        densitymap_fn(x, y, centers_array, centers_array, sigma=sigma).flatten()
-        for x, y in iter_simulated_pairs(
+    pairs = (
+        simulated_pairs
+        if simulated_pairs is not None
+        else iter_simulated_pairs(
             positive,
             repeats=repeats,
             epsilon_std=epsilon_std,
@@ -135,6 +164,10 @@ def build_heatmap_dataset(
             centers=centers_array,
             rng=rng,
         )
+    )
+    rows = [
+        densitymap_fn(x, y, centers_array, centers_array, sigma=sigma).flatten()
+        for x, y in pairs
     ]
     output = pd.DataFrame(rows)
     offset = log_offset if log_offset is not None else 1 / len(output.columns)
