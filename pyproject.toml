@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pdm-learn"
+version = "0.1.0"
+description = "Shared preprocessing, simulation, and modeling helpers for PDM learning analyses."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "ipykernel>=6.29,<8",
+    "jupyterlab>=4,<5",
+    "matplotlib>=3.8,<4",
+    "numpy>=1.26,<3",
+    "openpyxl>=3.1,<4",
+    "pandas>=2.2,<4",
+    "scikit-learn>=1.4,<2",
+    "scipy>=1.12,<2",
+    "seaborn>=0.13,<1",
+    "sympy>=1.12,<2",
+    "xgboost>=2,<4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pdm_learn"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/pdm_learn",
+    "tests",
+    "README.md",
+    "pyproject.toml",
+]

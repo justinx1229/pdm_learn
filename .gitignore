@@ -5,7 +5,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-.python-version
+.uv-cache/
 
 # Local environments and editor state
 .idea/

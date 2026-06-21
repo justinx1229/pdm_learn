@@ -14,16 +14,29 @@ This project contains notebook-driven analyses for CCLE/DepMap feature engineeri
 
 ## Getting started
 
-Create an environment and install the package in editable mode:
+`uv` is the recommended environment manager for this project. It reads
+`pyproject.toml`, creates the local `.venv`, installs `pdm_learn` in editable
+mode, and uses `uv.lock` as the reproducible dependency record.
 
 ```bash
-python3 -m pip install -e .
+uv sync
+uv run python -m unittest discover -s tests
 ```
 
-If you prefer a flat dependency install instead:
+If you prefer to start from conda, use conda only as a lightweight bootstrap for
+Python and `uv`, then let `uv` install the project dependencies:
 
 ```bash
-python3 -m pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate pdm_learn_env
+uv sync
+uv run python -m unittest discover -s tests
+```
+
+Launch notebooks from the locked environment with:
+
+```bash
+uv run jupyter lab
 ```
 
 ## Notebook workflow
