@@ -35,7 +35,7 @@ The test suite currently covers the shared preprocessing, simulation, modeling,
 and PPI helpers:
 
 ```text
-Ran 22 tests
+Ran 25 tests
 OK
 ```
 
@@ -86,8 +86,12 @@ data/raw/CCLE_gene_mutation.csv
 data/raw/Avana_gene_effect_20Q3.csv
 ```
 
-It writes the trimmed inputs required by
-`pdm_learn.oncogene.load_oncogene_inputs()`:
+It writes intermediate `trimmed_Wei` files under `data/DepMap_data/` and then
+derives the shared analysis-ready files under `data/DepMap_Trimmed/`. Oncogene
+and PPI analysis both require the shared `data/DepMap_Trimmed/*_Trimmed.csv`
+files.
+
+Intermediate files:
 
 ```text
 data/DepMap_data/CCLE_gene_expression_trimmed_Wei.csv
@@ -95,6 +99,16 @@ data/DepMap_data/CCLE_gene_cn_trimmed_Wei.csv
 data/DepMap_data/shRNA_Broad_Trimmed_Wei.csv
 data/DepMap_data/CCLE_gene_mutation_trimmed_Wei.csv
 data/DepMap_data/Avana_gene_effect_20Q3_Trimmed_Wei.csv
+```
+
+Required shared trimmed files:
+
+```text
+data/DepMap_Trimmed/Gene_Expression_Trimmed.csv
+data/DepMap_Trimmed/Copy_Number_Trimmed.csv
+data/DepMap_Trimmed/shRNA_Trimmed.csv
+data/DepMap_Trimmed/Gene_Mutation_Trimmed.csv
+data/DepMap_Trimmed/CRISPR_Trimmed.csv
 data/oncogene.txt
 ```
 
@@ -108,9 +122,8 @@ data/DepMap_data/CCLE_mutation_Wei.csv
 
 ### PPI Inputs
 
-The PPI workflow derives `data/DepMap_Trimmed/*_Trimmed.csv` from the oncogene
-`data/DepMap_data/*_trimmed_Wei.csv` files. The derivation keeps the 15,305
-genes shared across expression, copy-number, shRNA, and CRISPR; row-centers
+The shared `data/DepMap_Trimmed/*_Trimmed.csv` derivation keeps the 15,305 genes
+shared across expression, copy-number, shRNA, and CRISPR; row-centers
 expression/shRNA/CRISPR; doubles and snaps copy number to `0, 1, 2, 3, 4, 6, 8`;
 and converts the long mutation table into a binary gene-by-cell-line matrix.
 
@@ -154,13 +167,38 @@ the final manuscript README.
 Run scripts from the repository root. The scripts write generated tables to
 `data/`, `artifacts/`, and `figures/`.
 
-### 1. Oncogene Analysis
+### 1. Prepare Shared Trimmed Data
+
+Generate the shared `data/DepMap_Trimmed/*_Trimmed.csv` inputs. These are the
+required inputs for both oncogene and PPI analyses.
+
+```bash
+uv run python scripts/make_trimmed_inputs.py
+```
+
+Main outputs:
+
+```text
+data/DepMap_Trimmed/Gene_Expression_Trimmed.csv
+data/DepMap_Trimmed/Copy_Number_Trimmed.csv
+data/DepMap_Trimmed/shRNA_Trimmed.csv
+data/DepMap_Trimmed/Gene_Mutation_Trimmed.csv
+data/DepMap_Trimmed/CRISPR_Trimmed.csv
+```
+
+If you already have the intermediate `data/DepMap_data/*_trimmed_Wei.csv` files
+and only need to recreate the required shared trimmed files, run:
+
+```bash
+uv run python scripts/make_trimmed_inputs.py --from-intermediate
+```
+
+### 2. Oncogene Analysis
 
 Build feature tables, run rankings/benchmarks, and export heatmap-ready
 statistics:
 
 ```bash
-uv run python scripts/make_oncogene_trimmed_inputs.py
 uv run python scripts/make_oncogene_features.py
 uv run python scripts/run_oncogene_predictions.py
 ```
@@ -168,11 +206,6 @@ uv run python scripts/run_oncogene_predictions.py
 Main outputs:
 
 ```text
-data/DepMap_data/CCLE_gene_expression_trimmed_Wei.csv
-data/DepMap_data/CCLE_gene_cn_trimmed_Wei.csv
-data/DepMap_data/shRNA_Broad_Trimmed_Wei.csv
-data/DepMap_data/CCLE_gene_mutation_trimmed_Wei.csv
-data/DepMap_data/Avana_gene_effect_20Q3_Trimmed_Wei.csv
 data/Trimmed data/dataset_trimmed_v3.csv
 data/Trimmed data/pearson.csv
 data/Trimmed data/spearman.csv
@@ -184,7 +217,7 @@ artifacts/results/oncogene_feature_sweep.csv
 artifacts/results/oncogene_ks_pvalues.csv
 ```
 
-### 2. Simulation Analysis
+### 3. Simulation Analysis
 
 Generate simulated associations/features and benchmark feature representations:
 
@@ -210,13 +243,12 @@ data/simulated/negative_bicor.csv
 artifacts/results/simulation_benchmarks.csv
 ```
 
-### 3. PPI Analysis
+### 4. PPI Analysis
 
 Generate PPI controls, build BioGRID PDM features, and rank candidate
 cancer-complex pairs:
 
 ```bash
-uv run python scripts/make_ppi_trimmed_inputs.py
 uv run python scripts/make_ppi_controls.py
 uv run python scripts/make_ppi_features.py
 uv run python scripts/run_ppi_predictions.py
@@ -225,11 +257,6 @@ uv run python scripts/run_ppi_predictions.py
 Main outputs:
 
 ```text
-data/DepMap_Trimmed/Gene_Expression_Trimmed.csv
-data/DepMap_Trimmed/Copy_Number_Trimmed.csv
-data/DepMap_Trimmed/shRNA_Trimmed.csv
-data/DepMap_Trimmed/Gene_Mutation_Trimmed.csv
-data/DepMap_Trimmed/CRISPR_Trimmed.csv
 data/PPI_Pairs/*.csv
 artifacts/controls/positive_controls.pkl
 artifacts/controls/negative_controls.pkl
@@ -245,7 +272,7 @@ uv run python scripts/check_biogrid_matches_controls.py
 uv run python scripts/check_complex_pairs_in_biogrid.py
 ```
 
-### 4. Figures
+### 5. Figures
 
 After the analysis scripts have written their result tables, generate scripted
 figure files with:

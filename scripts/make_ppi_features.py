@@ -10,7 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build PDM feature table for BioGRID PPI pairs.")
+    parser = argparse.ArgumentParser(
+        description="Build a PDM feature table for BioGRID PPI pairs from required DepMap_Trimmed inputs."
+    )
     parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--artifacts-dir", type=Path, default=PROJECT_ROOT / "artifacts")
     parser.add_argument("--biogrid", type=Path, default=PROJECT_ROOT / "data" / "clean_biogrid_interactions.csv")

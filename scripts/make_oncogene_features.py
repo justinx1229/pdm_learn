@@ -10,7 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build oncogene PDM and statistic feature tables.")
+    parser = argparse.ArgumentParser(
+        description="Build oncogene PDM and statistic feature tables from required DepMap_Trimmed inputs."
+    )
     parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--density-name", default="dataset_trimmed_v3.csv")
     return parser.parse_args()

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pdm_learn.ppi import (
     canonical_pair,
     cancer_complex_pair_set,
-    derive_ppi_trimmed_inputs,
+    derive_shared_trimmed_inputs,
     parse_gene_list,
     sample_negative_control_pairs,
     sample_positive_control_pairs,
@@ -62,7 +62,7 @@ class PPITests(unittest.TestCase):
         excluded = cancer_complex_pair_set(self.complexes)
         self.assertTrue(all(canonical_pair(row.Gene1, row.Gene2) not in excluded for row in negatives.itertuples()))
 
-    def test_derive_ppi_trimmed_inputs_from_trimmed_wei_sources(self) -> None:
+    def test_derive_shared_trimmed_inputs_from_trimmed_wei_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "DepMap_data"
@@ -95,7 +95,7 @@ class PPITests(unittest.TestCase):
                 }
             ).to_csv(source / "CCLE_gene_mutation_trimmed_Wei.csv", index=False)
 
-            paths = derive_ppi_trimmed_inputs(source, output)
+            paths = derive_shared_trimmed_inputs(source, output)
 
             expression = pd.read_csv(paths["expression"])
             self.assertEqual(expression.iloc[:, 0].tolist(), ["A", "B"])

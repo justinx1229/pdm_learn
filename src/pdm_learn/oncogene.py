@@ -23,6 +23,13 @@ ONCOGENE_TRIMMED_FILENAMES = {
     "mutation": "CCLE_gene_mutation_trimmed_Wei.csv",
     "crispr": "Avana_gene_effect_20Q3_Trimmed_Wei.csv",
 }
+SHARED_TRIMMED_FILENAMES = {
+    "expression": "Gene_Expression_Trimmed.csv",
+    "copy_number": "Copy_Number_Trimmed.csv",
+    "shrna": "shRNA_Trimmed.csv",
+    "mutation": "Gene_Mutation_Trimmed.csv",
+    "crispr": "CRISPR_Trimmed.csv",
+}
 ONCOGENE_HEATMAP_DIMENSIONS = (
     (7, 7),
     (7, 7),
@@ -286,18 +293,20 @@ def _mutation_to_reference(
     row_names = df_out.iloc[:, 0].astype(str).str.strip()
     data_columns = pd.Index(df_out.columns.astype(str).str.strip()[1:])
 
-    mutation_pairs = mutation.iloc[:, [0, -1]].copy()
-    mutation_pairs.columns = [first_column, "cell_line"]
-    mutation_pairs[first_column] = mutation_pairs[first_column].astype(str).str.strip()
-    mutation_pairs["cell_line"] = mutation_pairs["cell_line"].astype(str).str.strip()
-    mutation_pairs = mutation_pairs[
-        mutation_pairs[first_column].isin(row_names) & mutation_pairs["cell_line"].isin(data_columns)
-    ]
+    mutation_columns = {str(column).strip() for column in mutation.columns}
+    if {"Hugo_Symbol", "Cell line"}.issubset(mutation_columns):
+        raise ValueError(
+            "Oncogene analysis now requires the shared trimmed binary mutation matrix "
+            "from data/DepMap_Trimmed/Gene_Mutation_Trimmed.csv."
+        )
 
-    mutation_matrix = (
-        pd.crosstab(mutation_pairs[first_column], mutation_pairs["cell_line"]).gt(0).astype(float)
-    )
+    mutation_matrix = mutation.copy()
+    mutation_matrix.columns = mutation_matrix.columns.astype(str).str.strip()
+    mutation_matrix.iloc[:, 0] = mutation_matrix.iloc[:, 0].astype(str).str.strip()
+    mutation_matrix = mutation_matrix.drop_duplicates(subset=mutation_matrix.columns[0]).set_index(mutation_matrix.columns[0])
+    mutation_matrix = mutation_matrix.apply(pd.to_numeric, errors="coerce")
     mutation_matrix = mutation_matrix.reindex(index=row_names, columns=data_columns, fill_value=0.0)
+    mutation_matrix = mutation_matrix.fillna(0.0).gt(0).astype(float)
     mutation_matrix = mutation_matrix.reset_index()
     mutation_matrix.columns = [first_column, *data_columns]
     return mutation_matrix, df_out
@@ -329,33 +338,34 @@ def _row_lookup(dataframe: pd.DataFrame) -> dict[str, np.ndarray]:
 
 
 def load_oncogene_inputs(data_dir: str | Path) -> dict[str, pd.DataFrame]:
+    return load_shared_trimmed_oncogene_inputs(data_dir)
+
+
+def load_shared_trimmed_oncogene_inputs(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     root = Path(data_dir)
 
     gene_exp = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_data" / "CCLE_gene_expression_trimmed_Wei.csv")
+        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["expression"])
     )
     gene_exp.name = "gene_exp"
 
-    copy_num = snap_copy_number_levels(
-        pd.read_csv(root / "DepMap_data" / "CCLE_gene_cn_trimmed_Wei.csv")
+    copy_num = _standardize_gene_names(
+        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["copy_number"])
     )
     copy_num.name = "copy_num"
 
     shrna = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_data" / "shRNA_Broad_Trimmed_Wei.csv")
+        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["shrna"])
     )
     shrna.name = "shRNA"
 
-    gene_mut = pd.read_csv(
-        root / "DepMap_data" / "CCLE_gene_mutation_trimmed_Wei.csv",
-        usecols=["Hugo_Symbol", "Cell line"],
-        low_memory=False,
+    gene_mut = _standardize_gene_names(
+        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["mutation"], low_memory=False)
     )
-    gene_mut.iloc[:, 0] = gene_mut.iloc[:, 0].astype(str).str.strip()
     gene_mut.name = "gene_mut"
 
     crispr = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_data" / "Avana_gene_effect_20Q3_Trimmed_Wei.csv")
+        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["crispr"])
     )
     crispr.name = "CRISPR"
 

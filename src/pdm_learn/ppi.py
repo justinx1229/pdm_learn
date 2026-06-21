@@ -18,14 +18,14 @@ PPI_DATASET_ORDER = ("gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR")
 PPI_METADATA_COLUMNS = {"Gene1", "Gene2", "Interaction_Type", "Confidence_Score", "pair"}
 GENES_COLUMN = "Representative Genes (Core Members)"
 COMPLEX_NAME_COLUMN = "Complex Name"
-PPI_TRIMMED_FILENAMES = {
+SHARED_TRIMMED_FILENAMES = {
     "expression": "Gene_Expression_Trimmed.csv",
     "copy_number": "Copy_Number_Trimmed.csv",
     "shrna": "shRNA_Trimmed.csv",
     "mutation": "Gene_Mutation_Trimmed.csv",
     "crispr": "CRISPR_Trimmed.csv",
 }
-PPI_SOURCE_FILENAMES = {
+SHARED_SOURCE_FILENAMES = {
     "expression": "CCLE_gene_expression_trimmed_Wei.csv",
     "copy_number": "CCLE_gene_cn_trimmed_Wei.csv",
     "shrna": "shRNA_Broad_Trimmed_Wei.csv",
@@ -115,15 +115,15 @@ def _mutation_matrix_from_long_table(
     return matrix
 
 
-def derive_ppi_trimmed_inputs(
+def derive_shared_trimmed_inputs(
     source_dir: str | Path,
     output_dir: str | Path,
     *,
     copy_number_levels: Sequence[float] = (0, 1, 2, 3, 4, 6, 8),
 ) -> dict[str, Path]:
-    """Build PPI-ready ``DepMap_Trimmed`` tables from ``trimmed_Wei`` inputs.
+    """Build shared ``DepMap_Trimmed`` tables from ``trimmed_Wei`` inputs.
 
-    The PPI inputs are derived by taking the shared gene intersection across
+    The shared inputs are derived by taking the gene intersection across
     expression, copy-number, shRNA, and CRISPR, row-centering continuous assays,
     discretizing copy number after doubling, and converting the long mutation
     table to a binary gene-by-cell-line matrix.
@@ -132,11 +132,11 @@ def derive_ppi_trimmed_inputs(
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    expression = pd.read_csv(source_root / PPI_SOURCE_FILENAMES["expression"])
-    copy_number = pd.read_csv(source_root / PPI_SOURCE_FILENAMES["copy_number"])
-    shrna = pd.read_csv(source_root / PPI_SOURCE_FILENAMES["shrna"])
-    crispr = pd.read_csv(source_root / PPI_SOURCE_FILENAMES["crispr"])
-    mutation = pd.read_csv(source_root / PPI_SOURCE_FILENAMES["mutation"], low_memory=False)
+    expression = pd.read_csv(source_root / SHARED_SOURCE_FILENAMES["expression"])
+    copy_number = pd.read_csv(source_root / SHARED_SOURCE_FILENAMES["copy_number"])
+    shrna = pd.read_csv(source_root / SHARED_SOURCE_FILENAMES["shrna"])
+    crispr = pd.read_csv(source_root / SHARED_SOURCE_FILENAMES["crispr"])
+    mutation = pd.read_csv(source_root / SHARED_SOURCE_FILENAMES["mutation"], low_memory=False)
 
     gene_sets = [
         set(_standardize_gene_index(dataframe).index)
@@ -145,11 +145,11 @@ def derive_ppi_trimmed_inputs(
     shared_genes = sorted(set.intersection(*gene_sets))
 
     outputs = {
-        "expression": output_root / PPI_TRIMMED_FILENAMES["expression"],
-        "copy_number": output_root / PPI_TRIMMED_FILENAMES["copy_number"],
-        "shrna": output_root / PPI_TRIMMED_FILENAMES["shrna"],
-        "mutation": output_root / PPI_TRIMMED_FILENAMES["mutation"],
-        "crispr": output_root / PPI_TRIMMED_FILENAMES["crispr"],
+        "expression": output_root / SHARED_TRIMMED_FILENAMES["expression"],
+        "copy_number": output_root / SHARED_TRIMMED_FILENAMES["copy_number"],
+        "shrna": output_root / SHARED_TRIMMED_FILENAMES["shrna"],
+        "mutation": output_root / SHARED_TRIMMED_FILENAMES["mutation"],
+        "crispr": output_root / SHARED_TRIMMED_FILENAMES["crispr"],
     }
 
     _row_center_matrix(_filter_to_shared_genes(expression, shared_genes)).to_csv(outputs["expression"], index=False)
