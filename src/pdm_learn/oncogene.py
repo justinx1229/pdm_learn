@@ -16,6 +16,13 @@ from pdm_learn.preprocessing import densitymap, drop_nan
 
 
 COPY_NUMBER_LEVELS = np.array([0, 1, 2, 3, 4, 6, 8], dtype=float)
+ONCOGENE_TRIMMED_FILENAMES = {
+    "expression": "CCLE_gene_expression_trimmed_Wei.csv",
+    "copy_number": "CCLE_gene_cn_trimmed_Wei.csv",
+    "shrna": "shRNA_Broad_Trimmed_Wei.csv",
+    "mutation": "CCLE_gene_mutation_trimmed_Wei.csv",
+    "crispr": "Avana_gene_effect_20Q3_Trimmed_Wei.csv",
+}
 ONCOGENE_HEATMAP_DIMENSIONS = (
     (7, 7),
     (7, 7),
@@ -46,6 +53,178 @@ def _standardize_gene_names(dataframe: pd.DataFrame) -> pd.DataFrame:
     output = dataframe.copy()
     output.iloc[:, 0] = output.iloc[:, 0].astype(str).str.strip()
     return output
+
+
+def _first_matching_column(dataframe: pd.DataFrame, candidates: Sequence[str]) -> str | None:
+    normalized = {str(column).strip().lower(): column for column in dataframe.columns}
+    for candidate in candidates:
+        match = normalized.get(candidate.lower())
+        if match is not None:
+            return str(match)
+    return None
+
+
+def _clean_gene_symbol(value: object) -> str:
+    text = str(value).strip()
+    if text.endswith(")") and " (" in text:
+        text = text.rsplit(" (", maxsplit=1)[0]
+    return text.strip()
+
+
+def _deduplicate_gene_rows(dataframe: pd.DataFrame) -> pd.DataFrame:
+    gene_column = dataframe.columns[0]
+    numeric = dataframe.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+    output = pd.concat([dataframe[[gene_column]], numeric], axis=1)
+    output = output.groupby(gene_column, as_index=False, sort=True).mean(numeric_only=True)
+    return output
+
+
+def standardize_oncogene_matrix(
+    dataframe: pd.DataFrame,
+    *,
+    orientation: str = "genes-as-rows",
+    gene_column: str | None = None,
+    sample_column: str | None = None,
+) -> pd.DataFrame:
+    """Standardize a raw CCLE/DepMap matrix to genes x cell lines.
+
+    The downstream oncogene workflow expects one gene-name column followed by
+    cell-line columns. Raw DepMap releases are not always oriented the same way,
+    so this helper supports either genes-as-rows or samples-as-rows input.
+    """
+    if orientation not in {"genes-as-rows", "samples-as-rows"}:
+        raise ValueError("orientation must be 'genes-as-rows' or 'samples-as-rows'")
+
+    input_df = dataframe.copy()
+    input_df.columns = [str(column).strip() for column in input_df.columns]
+
+    if orientation == "genes-as-rows":
+        if gene_column is None:
+            gene_column = _first_matching_column(
+                input_df,
+                ("gene name", "gene", "hugo_symbol", "hugo symbol", "symbol", "description", "unnamed: 0"),
+            )
+        gene_column = gene_column or str(input_df.columns[0])
+        if gene_column not in input_df.columns:
+            raise ValueError(f"Gene column {gene_column!r} was not found.")
+
+        output = input_df.copy()
+        output.insert(0, "gene name", output.pop(gene_column).map(_clean_gene_symbol))
+        output = output.loc[output["gene name"].ne("")].reset_index(drop=True)
+        output.columns = [str(column).strip() for column in output.columns]
+        return _deduplicate_gene_rows(output)
+
+    if sample_column is None:
+        sample_column = _first_matching_column(
+            input_df,
+            ("cell line", "cell_line", "cellline", "ccle_name", "modelid", "model_id", "depmap_id", "unnamed: 0"),
+        )
+    sample_column = sample_column or str(input_df.columns[0])
+    if sample_column not in input_df.columns:
+        raise ValueError(f"Sample/cell-line column {sample_column!r} was not found.")
+
+    sample_names = input_df.pop(sample_column).astype(str).str.strip()
+    numeric = input_df.apply(pd.to_numeric, errors="coerce")
+    numeric.index = sample_names
+    output = numeric.T.reset_index()
+    output.insert(0, "gene name", output.pop("index").map(_clean_gene_symbol))
+    output.columns = ["gene name", *[str(column).strip() for column in output.columns[1:]]]
+    return _deduplicate_gene_rows(output)
+
+
+def standardize_oncogene_mutations(
+    dataframe: pd.DataFrame,
+    *,
+    gene_column: str | None = None,
+    cell_line_column: str | None = None,
+) -> pd.DataFrame:
+    input_df = dataframe.copy()
+    input_df.columns = [str(column).strip() for column in input_df.columns]
+    gene_column = gene_column or _first_matching_column(
+        input_df,
+        ("Hugo_Symbol", "hugo symbol", "hugo_symbol", "gene", "gene name", "symbol"),
+    )
+    cell_line_column = cell_line_column or _first_matching_column(
+        input_df,
+        ("Cell line", "cell_line", "cellline", "CCLE_Name", "model_id", "ModelID", "DepMap_ID"),
+    )
+    if gene_column is None or gene_column not in input_df.columns:
+        raise ValueError("Could not identify the mutation gene column.")
+    if cell_line_column is None or cell_line_column not in input_df.columns:
+        raise ValueError("Could not identify the mutation cell-line column.")
+
+    output = input_df.copy()
+    output["Hugo_Symbol"] = output[gene_column].map(_clean_gene_symbol)
+    output["Cell line"] = output[cell_line_column].astype(str).str.strip()
+    output = output.loc[output["Hugo_Symbol"].ne("") & output["Cell line"].ne("")]
+    keep_columns = ["Hugo_Symbol", "Cell line"]
+    extra_columns = [column for column in output.columns if column not in keep_columns]
+    return output[keep_columns + extra_columns].reset_index(drop=True)
+
+
+def trim_oncogene_input_tables(
+    raw_paths: Mapping[str, str | Path],
+    output_dir: str | Path,
+    *,
+    matrix_orientation: str = "genes-as-rows",
+    gene_list: Sequence[str] | None = None,
+    align_cell_lines: bool = True,
+    gene_column: str | None = None,
+    sample_column: str | None = None,
+    mutation_gene_column: str | None = None,
+    mutation_cell_line_column: str | None = None,
+) -> dict[str, Path]:
+    required = {"expression", "copy_number", "shrna", "mutation", "crispr"}
+    missing = required - set(raw_paths)
+    if missing:
+        raise ValueError(f"Missing raw paths for: {', '.join(sorted(missing))}")
+
+    matrices = {
+        name: standardize_oncogene_matrix(
+            pd.read_csv(raw_paths[name]),
+            orientation=matrix_orientation,
+            gene_column=gene_column,
+            sample_column=sample_column,
+        )
+        for name in ("expression", "copy_number", "shrna", "crispr")
+    }
+    mutations = standardize_oncogene_mutations(
+        pd.read_csv(raw_paths["mutation"], low_memory=False),
+        gene_column=mutation_gene_column,
+        cell_line_column=mutation_cell_line_column,
+    )
+
+    if gene_list is not None:
+        allowed_genes = {str(gene).strip() for gene in gene_list}
+        matrices = {
+            name: dataframe.loc[dataframe.iloc[:, 0].isin(allowed_genes)].reset_index(drop=True)
+            for name, dataframe in matrices.items()
+        }
+        mutations = mutations.loc[mutations["Hugo_Symbol"].isin(allowed_genes)].reset_index(drop=True)
+
+    if align_cell_lines:
+        shared_columns = set(matrices["expression"].columns[1:])
+        for dataframe in matrices.values():
+            shared_columns &= set(dataframe.columns[1:])
+        ordered_columns = ["gene name", *sorted(shared_columns)]
+        matrices = {name: dataframe.loc[:, ordered_columns].copy() for name, dataframe in matrices.items()}
+        mutations = mutations.loc[mutations["Cell line"].isin(shared_columns)].reset_index(drop=True)
+
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    outputs = {
+        "expression": root / ONCOGENE_TRIMMED_FILENAMES["expression"],
+        "copy_number": root / ONCOGENE_TRIMMED_FILENAMES["copy_number"],
+        "shrna": root / ONCOGENE_TRIMMED_FILENAMES["shrna"],
+        "mutation": root / ONCOGENE_TRIMMED_FILENAMES["mutation"],
+        "crispr": root / ONCOGENE_TRIMMED_FILENAMES["crispr"],
+    }
+    matrices["expression"].to_csv(outputs["expression"], index=False)
+    matrices["copy_number"].to_csv(outputs["copy_number"], index=False)
+    matrices["shrna"].to_csv(outputs["shrna"], index=False)
+    matrices["crispr"].to_csv(outputs["crispr"], index=False)
+    mutations.to_csv(outputs["mutation"], index=False)
+    return outputs
 
 
 def snap_copy_number_levels(
@@ -531,7 +710,7 @@ def save_oncogene_feature_tables(
 def load_oncogene_feature_sets(
     data_dir: str | Path,
     *,
-    density_name: str = "dataset_trimmed_new.csv",
+    density_name: str = "dataset_trimmed_v3.csv",
     pearson_name: str = "pearson.csv",
     spearman_name: str = "spearman.csv",
     mi_name: str = "mi.csv",
