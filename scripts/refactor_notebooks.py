@@ -72,7 +72,7 @@ SETUP_CELL_SOURCE = [
     "    matches = [p for p in PROJECT_ROOT.rglob(name) if '.ipynb_checkpoints' not in p.parts and '.git' not in p.parts]\n",
     "    if len(matches) == 1:\n",
     "        return matches[0]\n",
-    "    if (text.startswith('/Users/') or text.startswith('/home/') or ':\\\\' in text) and '.' not in name:\n",
+    "    if not candidate.suffix and (candidate.is_absolute() or ':' in text):\n",
     "        return PROJECT_ROOT\n",
     "    return candidate\n",
     "\n",

@@ -8,9 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 
-DEFAULT_COMPLEXES_PATH = Path(
-    "notebooks/PPI/Wanyi's scripts and data/cancer_complexes_clean.xlsx"
-)
+DEFAULT_COMPLEXES_PATH = Path("data/cancer_complexes_clean.xlsx")
 DEFAULT_BIOGRID_PATH = Path("artifacts/results/clean_biogrid_interactions_pdm.csv")
 
 

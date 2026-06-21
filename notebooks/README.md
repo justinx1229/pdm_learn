@@ -5,3 +5,6 @@ Active notebooks are grouped by workflow:
 - `PPI/`: protein-protein interaction controls, feature generation, and downstream evaluation
 - `oncogene/`: oncogene ranking and feature-conversion experiments
 - `simulation/`: simulated association generation and model benchmarking
+
+Historical notebooks that are not part of the reviewer-facing reproduction
+workflow live under `archive/notebooks/`.

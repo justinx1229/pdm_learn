@@ -12,7 +12,7 @@ venv/
 .vscode/
 
 # Large local data and generated artifacts
-data/
+data/*
 artifacts/controls/
 artifacts/results/
 *.pkl
@@ -23,3 +23,7 @@ artifacts/results/
 build/
 dist/
 *.egg-info/
+
+# Small curated reference inputs required by reviewer-facing notebooks
+!data/
+!data/cancer_complexes_clean.xlsx
