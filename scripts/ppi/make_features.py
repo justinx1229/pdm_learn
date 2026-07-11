@@ -3,18 +3,20 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pdm_learn.oncogene import save_oncogene_feature_tables
+from pdm_learn.ppi import build_ppi_feature_table, load_biogrid_pairs, load_ppi_inputs
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build oncogene PDM and statistic feature tables from required DepMap_Trimmed inputs."
+        description="Build a PDM feature table for BioGRID PPI pairs from required DepMap_Trimmed inputs."
     )
     parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
-    parser.add_argument("--density-name", default="dataset_trimmed_v3.csv")
+    parser.add_argument("--artifacts-dir", type=Path, default=PROJECT_ROOT / "artifacts")
+    parser.add_argument("--biogrid", type=Path, default=PROJECT_ROOT / "data" / "clean_biogrid_interactions.csv")
+    parser.add_argument("--output-name", default="clean_biogrid_interactions_pdm.csv")
     parser.add_argument("--expression", type=Path, default=None, help="Shared trimmed expression CSV.")
     parser.add_argument("--copy-number", type=Path, default=None, help="Shared trimmed copy-number CSV.")
     parser.add_argument("--shrna", type=Path, default=None, help="Shared trimmed shRNA CSV.")
@@ -39,15 +41,18 @@ def input_overrides(args: argparse.Namespace) -> dict[str, Path]:
 
 def main() -> None:
     args = parse_args()
-    output_paths = save_oncogene_feature_tables(
-        args.data_dir,
-        input_paths=input_overrides(args),
-        density_name=args.density_name,
-        verbose=True,
-        progress=True,
-    )
-    for name, path in output_paths.items():
-        print(f"{name}: {path}")
+    output_dir = args.artifacts_dir / "results"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Loading shared DepMap input tables...")
+    datasets = load_ppi_inputs(args.data_dir, input_paths=input_overrides(args))
+    print(f"Loading BioGRID pairs from {args.biogrid}...")
+    pairs = load_biogrid_pairs(args.biogrid)
+    print(f"Building PPI PDM features for {len(pairs)} BioGRID pairs...")
+    features = build_ppi_feature_table(datasets, pairs, progress=True)
+    output_path = output_dir / args.output_name
+    features.to_csv(output_path, index=False)
+    print(f"PPI feature table: {output_path}")
 
 
 if __name__ == "__main__":

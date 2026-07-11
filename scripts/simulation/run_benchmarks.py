@@ -8,7 +8,7 @@ import pandas as pd
 from pdm_learn.modeling import KFold_PR, KFold_ROC_AUC, LOOCV
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:

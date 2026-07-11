@@ -11,6 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pdm_learn.oncogene import (
     ONCOGENE_TRIMMED_FILENAMES,
     SHARED_TRIMMED_FILENAMES,
+    OncogeneDatasetSpec,
+    OncogenePairSpec,
+    build_oncogene_density_features,
+    build_oncogene_statistic_features,
     load_oncogene_inputs,
     standardize_oncogene_matrix,
     standardize_oncogene_mutations,
@@ -102,6 +106,92 @@ class OncogeneTrimmingTests(unittest.TestCase):
 
             self.assertEqual(set(datasets), {"gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR"})
             self.assertEqual(datasets["gene_exp"].iloc[0, 0], "A")
+
+    def test_load_oncogene_inputs_accepts_generic_dataset_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            assay_path = root / "custom_assay.csv"
+            pd.DataFrame({"gene name": ["A"], "S1": [1.0]}).to_csv(assay_path, index=False)
+
+            datasets = load_oncogene_inputs(root, input_paths={"custom_assay": assay_path})
+
+            self.assertEqual(set(datasets), {"custom_assay"})
+            self.assertEqual(datasets["custom_assay"].name, "custom_assay")
+
+    def test_generic_density_features_use_custom_pairs_and_specs(self) -> None:
+        datasets = {
+            "assay_a": pd.DataFrame(
+                {
+                    "gene name": ["A", "B"],
+                    "S1": [0.0, 1.0],
+                    "S2": [1.0, 2.0],
+                    "S3": [2.0, 3.0],
+                }
+            ),
+            "assay_b": pd.DataFrame(
+                {
+                    "gene name": ["A", "B"],
+                    "S1": [2.0, 1.0],
+                    "S2": [1.0, 0.0],
+                    "S3": [0.0, -1.0],
+                }
+            ),
+        }
+        output = build_oncogene_density_features(
+            datasets,
+            pairs=[OncogenePairSpec("assay_a", "assay_b")],
+            boxes=3,
+        )
+
+        self.assertEqual(output.shape, (2, 10))
+        self.assertEqual(output.columns[0], "gene name")
+        self.assertTrue(all(column.startswith("assay_a.assay_b.") for column in output.columns[1:]))
+
+    def test_generic_binary_dataset_reindexes_to_reference_genes(self) -> None:
+        datasets = {
+            "binary_event": pd.DataFrame({"gene name": ["A"], "S1": [1.0], "S2": [0.0]}),
+            "response": pd.DataFrame(
+                {
+                    "gene name": ["A", "B"],
+                    "S1": [0.0, 1.0],
+                    "S2": [1.0, 2.0],
+                }
+            ),
+        }
+        specs = {
+            "binary_event": OncogeneDatasetSpec("binary_event", "binary", (0.0, 1.0)),
+            "response": OncogeneDatasetSpec("response", "continuous"),
+        }
+
+        output = build_oncogene_density_features(
+            datasets,
+            pairs=[("binary_event", "response")],
+            dataset_specs=specs,
+            boxes=3,
+        )
+
+        self.assertEqual(output["gene name"].tolist(), ["A", "B"])
+        self.assertEqual(output.shape[1], 1 + 2 * 3)
+
+    def test_generic_statistic_features_use_discrete_metadata(self) -> None:
+        datasets = {
+            "state": pd.DataFrame({"gene name": ["A", "B"], "S1": [0, 1], "S2": [1, 1], "S3": [0, 0]}),
+            "score": pd.DataFrame({"gene name": ["A", "B"], "S1": [0.0, 1.0], "S2": [1.0, 2.0], "S3": [2.0, 3.0]}),
+        }
+        specs = {
+            "state": OncogeneDatasetSpec("state", "discrete", (0.0, 1.0), normalize=False),
+            "score": OncogeneDatasetSpec("score", "continuous"),
+        }
+
+        output = build_oncogene_statistic_features(
+            datasets,
+            method="mi",
+            pairs=[("state", "score")],
+            dataset_specs=specs,
+        )
+
+        self.assertEqual(output.columns.tolist(), ["gene name", "state.score"])
+        self.assertEqual(output.shape[0], 2)
 
     def test_mutation_to_reference_accepts_binary_matrix(self) -> None:
         mutation = pd.DataFrame({"gene name": ["A", "B"], "CL1": [1, 0], "CL2": [0, 1], "CL3": [1, 1]})

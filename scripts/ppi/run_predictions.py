@@ -8,7 +8,7 @@ import pandas as pd
 from pdm_learn.ppi import evaluate_ppi_controls, load_cancer_complexes, rank_ppi_pairs_cancer
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:

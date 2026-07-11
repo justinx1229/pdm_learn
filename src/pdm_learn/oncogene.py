@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -55,6 +56,56 @@ ONCOGENE_PAIRS = (
     ("shRNA", "CRISPR", ()),
     ("gene_mut", "CRISPR", ("mut",)),
 )
+
+
+@dataclass(frozen=True)
+class OncogeneDatasetSpec:
+    """Feature-building metadata for one gene-by-sample matrix."""
+
+    name: str
+    kind: str = "continuous"
+    levels: tuple[float, ...] | None = None
+    normalize: bool | None = None
+
+    @property
+    def is_continuous(self) -> bool:
+        return self.kind == "continuous"
+
+    @property
+    def is_discrete(self) -> bool:
+        return not self.is_continuous
+
+
+@dataclass(frozen=True)
+class OncogenePairSpec:
+    left: str
+    right: str
+
+
+DEFAULT_ONCOGENE_DATASET_SPECS = {
+    "gene_exp": OncogeneDatasetSpec("gene_exp", "continuous"),
+    "copy_num": OncogeneDatasetSpec("copy_num", "discrete", tuple(COPY_NUMBER_LEVELS), normalize=False),
+    "shRNA": OncogeneDatasetSpec("shRNA", "continuous"),
+    "gene_mut": OncogeneDatasetSpec("gene_mut", "binary", (0.0, 1.0), normalize=False),
+    "CRISPR": OncogeneDatasetSpec("CRISPR", "continuous"),
+}
+DEFAULT_ONCOGENE_PAIR_SPECS = tuple(
+    OncogenePairSpec(left, right)
+    for left, right, _ in ONCOGENE_PAIRS
+)
+LEGACY_ONCOGENE_INPUT_NAMES = {
+    "expression": "gene_exp",
+    "copy_number": "copy_num",
+    "shrna": "shRNA",
+    "mutation": "gene_mut",
+    "crispr": "CRISPR",
+}
+STATISTIC_METHOD_FILENAMES = {
+    "pearson": "pearson.csv",
+    "spearman": "spearman.csv",
+    "mi": "mi.csv",
+    "bicor": "bicor.csv",
+}
 
 
 def _standardize_gene_names(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -260,8 +311,14 @@ def _process_continuous_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
 def _normalize_rows(dataframe: pd.DataFrame) -> pd.DataFrame:
     output = dataframe.copy()
     numeric = output.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
-    output.iloc[:, 1:] = numeric.sub(numeric.mean(axis=1), axis=0)
-    return output
+    centered = numeric.sub(numeric.mean(axis=1), axis=0)
+    return pd.concat(
+        [
+            output.iloc[:, :1].reset_index(drop=True),
+            centered.reset_index(drop=True),
+        ],
+        axis=1,
+    )
 
 
 def _trim_pair_dataframes(
@@ -338,6 +395,15 @@ def _row_lookup(dataframe: pd.DataFrame) -> dict[str, np.ndarray]:
     }
 
 
+def _normalize_oncogene_input_paths(
+    input_paths: Mapping[str, str | Path],
+) -> dict[str, Path]:
+    return {
+        LEGACY_ONCOGENE_INPUT_NAMES.get(name, name): Path(path)
+        for name, path in input_paths.items()
+    }
+
+
 def load_oncogene_inputs(
     data_dir: str | Path,
     *,
@@ -352,52 +418,207 @@ def load_shared_trimmed_oncogene_inputs(
     input_paths: Mapping[str, str | Path] | None = None,
 ) -> dict[str, pd.DataFrame]:
     root = Path(data_dir)
-    input_paths = input_paths or {}
+    if input_paths:
+        paths = _normalize_oncogene_input_paths(input_paths)
+    else:
+        paths = {
+            "gene_exp": root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["expression"],
+            "copy_num": root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["copy_number"],
+            "shRNA": root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["shrna"],
+            "gene_mut": root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["mutation"],
+            "CRISPR": root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["crispr"],
+        }
 
-    def path_for(name: str) -> Path:
-        return Path(input_paths.get(name, root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES[name]))
+    datasets = {}
+    for name, path in paths.items():
+        dataframe = _standardize_gene_names(pd.read_csv(path, low_memory=False))
+        dataframe.name = name
+        datasets[name] = dataframe
+    return datasets
 
-    gene_exp = _standardize_gene_names(
-        pd.read_csv(path_for("expression"))
-    )
-    gene_exp.name = "gene_exp"
 
-    copy_num = _standardize_gene_names(
-        pd.read_csv(path_for("copy_number"))
-    )
-    copy_num.name = "copy_num"
+def oncogene_gene_list(
+    datasets: Mapping[str, pd.DataFrame],
+    *,
+    dataset_names: Sequence[str] | None = None,
+    mode: str = "union",
+) -> list[str]:
+    if mode not in {"union", "intersection"}:
+        raise ValueError("mode must be 'union' or 'intersection'")
+    names = list(dataset_names) if dataset_names is not None else list(datasets)
+    if not names:
+        return []
 
-    shrna = _standardize_gene_names(
-        pd.read_csv(path_for("shrna"))
-    )
-    shrna.name = "shRNA"
+    gene_sets = [
+        set(datasets[name].iloc[:, 0].astype(str).str.strip())
+        for name in names
+    ]
+    genes = set.union(*gene_sets) if mode == "union" else set.intersection(*gene_sets)
+    return sorted(genes)
 
-    gene_mut = _standardize_gene_names(
-        pd.read_csv(path_for("mutation"), low_memory=False)
-    )
-    gene_mut.name = "gene_mut"
 
-    crispr = _standardize_gene_names(
-        pd.read_csv(path_for("crispr"))
-    )
-    crispr.name = "CRISPR"
+def _coerce_dataset_spec(name: str, value: object | None = None) -> OncogeneDatasetSpec:
+    if isinstance(value, OncogeneDatasetSpec):
+        return value
+    if isinstance(value, str):
+        return OncogeneDatasetSpec(name, value)
+    if isinstance(value, Mapping):
+        kind = str(value.get("kind", "continuous"))
+        levels = value.get("levels")
+        normalize = value.get("normalize")
+        level_tuple = None if levels is None else tuple(float(level) for level in levels)
+        return OncogeneDatasetSpec(name, kind, level_tuple, normalize)
+    if name in DEFAULT_ONCOGENE_DATASET_SPECS:
+        return DEFAULT_ONCOGENE_DATASET_SPECS[name]
+    return OncogeneDatasetSpec(name)
 
-    return {
-        "gene_exp": gene_exp,
-        "copy_num": copy_num,
-        "shRNA": shrna,
-        "gene_mut": gene_mut,
-        "CRISPR": crispr,
+
+def _normalize_dataset_specs(
+    datasets: Mapping[str, pd.DataFrame],
+    dataset_specs: Mapping[str, OncogeneDatasetSpec | Mapping[str, object] | str] | None,
+) -> dict[str, OncogeneDatasetSpec]:
+    dataset_specs = dataset_specs or {}
+    normalized = {}
+    for name in datasets:
+        normalized[name] = _coerce_dataset_spec(name, dataset_specs.get(name))
+        if normalized[name].kind not in {"continuous", "binary", "discrete"}:
+            raise ValueError(f"Dataset {name!r} has unsupported kind {normalized[name].kind!r}.")
+    return normalized
+
+
+def _coerce_pair_spec(value: OncogenePairSpec | Sequence[str]) -> OncogenePairSpec:
+    if isinstance(value, OncogenePairSpec):
+        return value
+    if isinstance(value, str):
+        separator = ":" if ":" in value else ","
+        if separator not in value:
+            raise ValueError("String pair specs must use 'left:right' or 'left,right'.")
+        left, right = value.split(separator, maxsplit=1)
+        return OncogenePairSpec(left.strip(), right.strip())
+    if len(value) < 2:
+        raise ValueError("Pair specs must contain at least two dataset names.")
+    return OncogenePairSpec(str(value[0]), str(value[1]))
+
+
+def _normalize_pair_specs(
+    datasets: Mapping[str, pd.DataFrame],
+    pairs: Sequence[OncogenePairSpec | Sequence[str]] | None,
+) -> tuple[OncogenePairSpec, ...]:
+    if pairs is None:
+        if all(name in datasets for name in DEFAULT_ONCOGENE_DATASET_SPECS):
+            return DEFAULT_ONCOGENE_PAIR_SPECS
+        names = list(datasets)
+        return tuple(
+            OncogenePairSpec(left, right)
+            for left_index, left in enumerate(names)
+            for right in names[left_index + 1:]
+        )
+
+    normalized = tuple(_coerce_pair_spec(pair) for pair in pairs)
+    missing = {
+        name
+        for pair in normalized
+        for name in (pair.left, pair.right)
+        if name not in datasets
     }
+    if missing:
+        raise ValueError(f"Pair specs reference missing datasets: {', '.join(sorted(missing))}")
+    return normalized
 
 
-def oncogene_gene_list(datasets: Mapping[str, pd.DataFrame]) -> list[str]:
-    return sorted(
-        set(datasets["gene_exp"].iloc[:, 0])
-        | set(datasets["copy_num"].iloc[:, 0])
-        | set(datasets["shRNA"].iloc[:, 0])
-        | set(datasets["CRISPR"].iloc[:, 0])
-    )
+def _spec_levels(
+    dataframe: pd.DataFrame,
+    spec: OncogeneDatasetSpec,
+) -> np.ndarray:
+    if spec.is_continuous:
+        raise ValueError("Continuous datasets do not have fixed density levels.")
+    if spec.levels is not None:
+        return np.asarray(spec.levels, dtype=float)
+    values = dataframe.iloc[:, 1:].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    levels = np.unique(values[np.isfinite(values)])
+    if len(levels) == 0:
+        raise ValueError(f"Could not infer discrete levels for dataset {spec.name!r}.")
+    return levels.astype(float)
+
+
+def _should_normalize(spec: OncogeneDatasetSpec) -> bool:
+    if spec.normalize is not None:
+        return spec.normalize
+    return spec.is_continuous
+
+
+def _binary_matrix_to_reference(
+    binary: pd.DataFrame,
+    reference: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    reference_out = reference.copy()
+    reference_out.iloc[:, 0] = reference_out.iloc[:, 0].astype(str).str.strip()
+
+    first_column = str(reference_out.columns[0]).strip()
+    row_names = reference_out.iloc[:, 0].astype(str).str.strip()
+    data_columns = pd.Index(reference_out.columns.astype(str).str.strip()[1:])
+
+    binary_matrix = binary.copy()
+    binary_matrix.columns = binary_matrix.columns.astype(str).str.strip()
+    binary_matrix.iloc[:, 0] = binary_matrix.iloc[:, 0].astype(str).str.strip()
+    binary_matrix = binary_matrix.drop_duplicates(subset=binary_matrix.columns[0]).set_index(binary_matrix.columns[0])
+    binary_matrix = binary_matrix.apply(pd.to_numeric, errors="coerce")
+    binary_matrix = binary_matrix.reindex(index=row_names, columns=data_columns, fill_value=0.0)
+    binary_matrix = binary_matrix.fillna(0.0).gt(0).astype(float)
+    binary_matrix = binary_matrix.reset_index()
+    binary_matrix.columns = [first_column, *data_columns]
+    return binary_matrix, reference_out
+
+
+def _prepare_pair_dataframes(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    left_spec: OncogeneDatasetSpec,
+    right_spec: OncogeneDatasetSpec,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if left_spec.kind == "binary" and right_spec.kind != "binary":
+        left_out, right_out = _binary_matrix_to_reference(left, right)
+    elif right_spec.kind == "binary" and left_spec.kind != "binary":
+        right_out, left_out = _binary_matrix_to_reference(right, left)
+    else:
+        left_out, right_out = _trim_pair_dataframes(left, right)
+
+    if _should_normalize(left_spec):
+        left_out = _normalize_rows(left_out)
+    if _should_normalize(right_spec):
+        right_out = _normalize_rows(right_out)
+    return left_out, right_out
+
+
+def _safe_std(values: pd.DataFrame | np.ndarray) -> float:
+    array = values.iloc[:, 1:].to_numpy(dtype=float) if isinstance(values, pd.DataFrame) else np.asarray(values, dtype=float)
+    std = float(np.nanstd(array))
+    if not np.isfinite(std) or std == 0:
+        return 1.0
+    return std
+
+
+def _safe_variance(values: pd.DataFrame) -> float:
+    variance = float(np.nanvar(values.iloc[:, 1:].to_numpy(dtype=float)))
+    if not np.isfinite(variance) or variance == 0:
+        return 1.0
+    return variance
+
+
+def _pair_sigma(
+    left_df: pd.DataFrame,
+    right_df: pd.DataFrame,
+    left_spec: OncogeneDatasetSpec,
+    right_spec: OncogeneDatasetSpec,
+) -> float:
+    if left_spec.is_continuous and right_spec.is_continuous:
+        return float(np.sqrt((_safe_variance(left_df) + _safe_variance(right_df)) / 2))
+    if left_spec.is_continuous:
+        return _safe_std(left_df)
+    if right_spec.is_continuous:
+        return _safe_std(right_df)
+    return 1.0
+
 
 def _bin_continuous(values: np.ndarray, num_bins: int = 10) -> np.ndarray:
     finite_values = np.asarray(values, dtype=float)
@@ -486,153 +707,107 @@ def bicor(
 def build_oncogene_density_features(
     datasets: Mapping[str, pd.DataFrame],
     *,
+    pairs: Sequence[OncogenePairSpec | Sequence[str]] | None = None,
+    dataset_specs: Mapping[str, OncogeneDatasetSpec | Mapping[str, object] | str] | None = None,
+    gene_universe: str = "union",
+    gene_column_name: str = "gene name",
     boxes: int = 7,
     copy_number_levels: Sequence[float] = COPY_NUMBER_LEVELS,
     log_offset: float | None = None,
+    drop_missing: bool = True,
     progress: bool = False,
 ) -> pd.DataFrame:
-    genes = oncogene_gene_list(datasets)
-    dataset = pd.DataFrame({"gene name": genes})
+    specs = _normalize_dataset_specs(datasets, dataset_specs)
+    if "copy_num" in specs and specs["copy_num"].levels == tuple(COPY_NUMBER_LEVELS):
+        specs["copy_num"] = OncogeneDatasetSpec("copy_num", "discrete", tuple(copy_number_levels), normalize=False)
+    pair_specs = _normalize_pair_specs(datasets, pairs)
+    pair_dataset_names = sorted({name for pair in pair_specs for name in (pair.left, pair.right)})
+    genes = oncogene_gene_list(datasets, dataset_names=pair_dataset_names, mode=gene_universe)
+    dataset = pd.DataFrame({gene_column_name: genes})
     gene_index = {gene: index for index, gene in enumerate(genes)}
 
-    discrete_levels = np.asarray(copy_number_levels, dtype=float)
-
-    pair_iterator = tqdm(ONCOGENE_PAIRS, desc="Oncogene PDM feature blocks", disable=not progress)
-    for left_name, right_name, flags in pair_iterator:
+    pair_iterator = tqdm(pair_specs, desc="Gene PDM feature blocks", disable=not progress)
+    for pair in pair_iterator:
+        left_name = pair.left
+        right_name = pair.right
         pair_label = f"{left_name} vs {right_name}"
         pair_iterator.set_postfix_str(pair_label)
-        is_mut = "mut" in flags
-        is_cn = "cn" in flags
 
-        if is_mut and is_cn:
-            column_count = 2 * len(discrete_levels)
-        elif is_mut:
-            column_count = 2 * boxes
-        else:
-            column_count = boxes * boxes
+        left_spec = specs[left_name]
+        right_spec = specs[right_name]
+        left_df, right_df = _prepare_pair_dataframes(
+            datasets[left_name],
+            datasets[right_name],
+            left_spec,
+            right_spec,
+        )
+
+        left_levels = None if left_spec.is_continuous else _spec_levels(left_df, left_spec)
+        right_levels = None if right_spec.is_continuous else _spec_levels(right_df, right_spec)
+        left_width = boxes if left_spec.is_continuous else len(left_levels)
+        right_width = boxes if right_spec.is_continuous else len(right_levels)
+        column_count = left_width * right_width
 
         columns = [f"{left_name}.{right_name}.{i}" for i in range(column_count)]
         temp = pd.DataFrame(np.nan, index=range(len(genes)), columns=columns)
 
-        if is_mut:
-            df1_t, df2_t = _mutation_to_reference(datasets[left_name], datasets[right_name])
-        else:
-            df1_t, df2_t = _trim_pair_dataframes(datasets[left_name], datasets[right_name])
+        left_rows = _row_lookup(left_df)
+        right_rows = _row_lookup(right_df)
+        left_std = _safe_std(left_df)
+        right_std = _safe_std(right_df)
+        sigma = _pair_sigma(left_df, right_df, left_spec, right_spec)
 
-        if is_mut and is_cn:
-            left_rows = _row_lookup(df1_t)
-            right_rows = _row_lookup(df2_t)
-            for gene_name in tqdm(df2_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
-                x = _extract_density_values(left_rows[gene_name], cutoff=False)
-                y = _extract_density_values(right_rows[gene_name], cutoff=False)
-                x, y = drop_nan(x, y)
-                matrix = densitymap(
-                    x,
-                    y,
-                    [0.0, 1.0],
-                    discrete_levels,
-                    xdiscrete=True,
-                    ydiscrete=True,
-                )
-                temp.iloc[gene_index[gene_name]] = matrix.flatten()
-        elif is_mut:
-            df2_t = _normalize_rows(df2_t)
-            left_rows = _row_lookup(df1_t)
-            right_rows = _row_lookup(df2_t)
-            sigma = float(np.nanstd(df2_t.iloc[:, 1:].to_numpy(dtype=float)))
-            if not np.isfinite(sigma) or sigma == 0:
-                sigma = 1.0
-            for gene_name in tqdm(df2_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
-                x = _extract_density_values(left_rows[gene_name], cutoff=False)
-                y, y_centers = _extract_density_values(
-                    right_rows[gene_name],
-                    cutoff=True,
-                    std=sigma,
-                    max_value=boxes,
-                    boxes=boxes,
-                )
-                x, y = drop_nan(x, y)
-                matrix = densitymap(
-                    x,
-                    y,
-                    [0.0, 1.0],
-                    y_centers,
-                    xdiscrete=True,
-                    sigma=sigma,
-                )
-                temp.iloc[gene_index[gene_name]] = matrix.flatten()
-        elif is_cn:
-            df1_t = _normalize_rows(df1_t)
-            left_rows = _row_lookup(df1_t)
-            right_rows = _row_lookup(df2_t)
-            sigma = float(np.nanstd(df1_t.iloc[:, 1:].to_numpy(dtype=float)))
-            if not np.isfinite(sigma) or sigma == 0:
-                sigma = 1.0
-            for gene_name in tqdm(df1_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
+        common_genes = [gene for gene in left_df.iloc[:, 0].astype(str).str.strip() if gene in right_rows]
+        for gene_name in tqdm(common_genes, desc=pair_label, disable=not progress, leave=False):
+            if gene_name not in gene_index:
+                continue
+            if left_spec.is_continuous:
                 x, x_centers = _extract_density_values(
                     left_rows[gene_name],
                     cutoff=True,
-                    std=sigma,
+                    std=left_std,
                     max_value=boxes,
                     boxes=boxes,
                 )
+            else:
+                x = _extract_density_values(left_rows[gene_name], cutoff=False)
+                x_centers = left_levels
+
+            if right_spec.is_continuous:
+                y, y_centers = _extract_density_values(
+                    right_rows[gene_name],
+                    cutoff=True,
+                    std=right_std,
+                    max_value=boxes,
+                    boxes=boxes,
+                )
+            else:
                 y = _extract_density_values(right_rows[gene_name], cutoff=False)
-                x, y = drop_nan(x, y)
-                matrix = densitymap(
-                    x,
-                    y,
-                    x_centers,
-                    discrete_levels,
-                    ydiscrete=True,
-                    sigma=sigma,
-                )
-                temp.iloc[gene_index[gene_name]] = matrix.flatten()
-        else:
-            df1_t = _normalize_rows(df1_t)
-            df2_t = _normalize_rows(df2_t)
-            left_rows = _row_lookup(df1_t)
-            right_rows = _row_lookup(df2_t)
-            x_std = float(np.nanstd(df1_t.iloc[:, 1:].to_numpy(dtype=float)))
-            y_std = float(np.nanstd(df2_t.iloc[:, 1:].to_numpy(dtype=float)))
-            sigma = float(
-                np.sqrt(
-                    (
-                        np.nanvar(df1_t.iloc[:, 1:].to_numpy(dtype=float))
-                        + np.nanvar(df2_t.iloc[:, 1:].to_numpy(dtype=float))
-                    )
-                    / 2
-                )
+                y_centers = right_levels
+
+            x, y = drop_nan(x, y)
+            if len(x) == 0:
+                continue
+            matrix = densitymap(
+                x,
+                y,
+                x_centers,
+                y_centers,
+                xdiscrete=left_spec.is_discrete,
+                ydiscrete=right_spec.is_discrete,
+                sigma=sigma,
             )
-            if not np.isfinite(x_std) or x_std == 0:
-                x_std = 1.0
-            if not np.isfinite(y_std) or y_std == 0:
-                y_std = 1.0
-            if not np.isfinite(sigma) or sigma == 0:
-                sigma = 1.0
-            for gene_name in tqdm(df1_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
-                x, x_centers = _extract_density_values(
-                    left_rows[gene_name],
-                    cutoff=True,
-                    std=x_std,
-                    max_value=boxes,
-                    boxes=boxes,
-                )
-                y, y_centers = _extract_density_values(
-                    right_rows[gene_name],
-                    cutoff=True,
-                    std=y_std,
-                    max_value=boxes,
-                    boxes=boxes,
-                )
-                x, y = drop_nan(x, y)
-                matrix = densitymap(x, y, x_centers, y_centers, sigma=sigma)
-                temp.iloc[gene_index[gene_name]] = matrix.flatten()
+            if isinstance(matrix, str):
+                continue
+            temp.iloc[gene_index[gene_name]] = matrix.flatten()
 
-        offset = log_offset if log_offset is not None else 1 / len(df1_t.columns)
+        offset = log_offset if log_offset is not None else 1 / max(len(left_df.columns), 1)
         temp = temp.astype(float) + offset
         dataset = pd.concat([dataset, temp.map(np.log)], axis=1)
 
-    return dataset.dropna().reset_index(drop=True)
+    if drop_missing:
+        dataset = dataset.dropna()
+    return dataset.reset_index(drop=True)
 
 
 def build_oncogene_correlation_features(
@@ -649,36 +824,52 @@ def build_oncogene_statistic_features(
     datasets: Mapping[str, pd.DataFrame],
     *,
     method: str = "pearson",
+    pairs: Sequence[OncogenePairSpec | Sequence[str]] | None = None,
+    dataset_specs: Mapping[str, OncogeneDatasetSpec | Mapping[str, object] | str] | None = None,
+    gene_universe: str = "union",
+    gene_column_name: str = "gene name",
     progress: bool = False,
 ) -> pd.DataFrame:
     if method not in {"pearson", "spearman", "mi", "bicor"}:
         raise ValueError("method must be 'pearson', 'spearman', 'mi', or 'bicor'")
 
-    genes = oncogene_gene_list(datasets)
-    dataset = pd.DataFrame({"gene name": genes})
+    specs = _normalize_dataset_specs(datasets, dataset_specs)
+    pair_specs = _normalize_pair_specs(datasets, pairs)
+    pair_dataset_names = sorted({name for pair in pair_specs for name in (pair.left, pair.right)})
+    genes = oncogene_gene_list(datasets, dataset_names=pair_dataset_names, mode=gene_universe)
+    dataset = pd.DataFrame({gene_column_name: genes})
     gene_index = {gene: index for index, gene in enumerate(genes)}
 
     pair_iterator = tqdm(
-        ONCOGENE_PAIRS,
-        desc=f"Oncogene {method} feature blocks",
+        pair_specs,
+        desc=f"Gene {method} feature blocks",
         disable=not progress,
     )
-    for left_name, right_name, _ in pair_iterator:
+    for pair in pair_iterator:
+        left_name = pair.left
+        right_name = pair.right
         pair_label = f"{left_name} vs {right_name}"
         pair_iterator.set_postfix_str(pair_label)
         temp = pd.DataFrame(np.nan, index=range(len(genes)), columns=[f"{left_name}.{right_name}"])
 
-        if left_name == "gene_mut":
-            left_df, right_df = _mutation_to_reference(datasets[left_name], datasets[right_name])
-        else:
-            left_df, right_df = _trim_pair_dataframes(datasets[left_name], datasets[right_name])
+        left_spec = specs[left_name]
+        right_spec = specs[right_name]
+        left_df, right_df = _prepare_pair_dataframes(
+            datasets[left_name],
+            datasets[right_name],
+            left_spec,
+            right_spec,
+        )
 
         left_rows = _row_lookup(left_df)
         right_rows = _row_lookup(right_df)
-        x_discrete = left_name == "gene_mut"
-        y_discrete = right_name == "copy_num"
+        x_discrete = left_spec.is_discrete
+        y_discrete = right_spec.is_discrete
 
-        for gene_name in tqdm(left_df.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
+        common_genes = [gene for gene in left_df.iloc[:, 0].astype(str).str.strip() if gene in right_rows]
+        for gene_name in tqdm(common_genes, desc=pair_label, disable=not progress, leave=False):
+            if gene_name not in gene_index:
+                continue
             x = left_rows[gene_name]
             y = right_rows[gene_name]
             x, y = drop_nan(x, y)
@@ -711,6 +902,10 @@ def save_oncogene_feature_tables(
     data_dir: str | Path,
     *,
     input_paths: Mapping[str, str | Path] | None = None,
+    output_dir: str | Path | None = None,
+    pairs: Sequence[OncogenePairSpec | Sequence[str]] | None = None,
+    dataset_specs: Mapping[str, OncogeneDatasetSpec | Mapping[str, object] | str] | None = None,
+    feature_methods: Sequence[str] = ("pearson", "spearman", "mi", "bicor"),
     density_name: str = "dataset_trimmed_v3.csv",
     pearson_name: str = "pearson.csv",
     spearman_name: str = "spearman.csv",
@@ -720,46 +915,53 @@ def save_oncogene_feature_tables(
     progress: bool = False,
 ) -> dict[str, Path]:
     root = Path(data_dir)
-    output_dir = root / "Trimmed data"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_root = Path(output_dir) if output_dir is not None else root / "Trimmed data"
+    output_root.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        print("Loading shared DepMap input tables...")
+        print("Loading input tables...")
     datasets = load_oncogene_inputs(root, input_paths=input_paths)
-    density_path = output_dir / density_name
-    pearson_path = output_dir / pearson_name
-    spearman_path = output_dir / spearman_name
-    mi_path = output_dir / mi_name
-    bicor_path = output_dir / bicor_name
+    density_path = output_root / density_name
+    method_names = {
+        "pearson": pearson_name,
+        "spearman": spearman_name,
+        "mi": mi_name,
+        "bicor": bicor_name,
+    }
 
     if verbose:
         print(f"Building PDM density features -> {density_path}")
-    build_oncogene_density_features(datasets, progress=progress).to_csv(density_path, index=False)
-    if verbose:
-        print(f"Building Pearson features -> {pearson_path}")
-    build_oncogene_statistic_features(datasets, method="pearson", progress=progress).to_csv(pearson_path, index=False)
-    if verbose:
-        print(f"Building Spearman features -> {spearman_path}")
-    build_oncogene_statistic_features(datasets, method="spearman", progress=progress).to_csv(spearman_path, index=False)
-    if verbose:
-        print(f"Building mutual-information features -> {mi_path}")
-    build_oncogene_statistic_features(datasets, method="mi", progress=progress).to_csv(mi_path, index=False)
-    if verbose:
-        print(f"Building bicor features -> {bicor_path}")
-    build_oncogene_statistic_features(datasets, method="bicor", progress=progress).to_csv(bicor_path, index=False)
+    build_oncogene_density_features(
+        datasets,
+        pairs=pairs,
+        dataset_specs=dataset_specs,
+        progress=progress,
+    ).to_csv(density_path, index=False)
 
-    return {
-        "density": density_path,
-        "pearson": pearson_path,
-        "spearman": spearman_path,
-        "mi": mi_path,
-        "bicor": bicor_path,
-    }
+    outputs = {"density": density_path}
+    for method in feature_methods:
+        if method not in method_names:
+            raise ValueError("feature_methods may contain only 'pearson', 'spearman', 'mi', or 'bicor'")
+        path = output_root / method_names[method]
+        if verbose:
+            print(f"Building {method} features -> {path}")
+        build_oncogene_statistic_features(
+            datasets,
+            method=method,
+            pairs=pairs,
+            dataset_specs=dataset_specs,
+            progress=progress,
+        ).to_csv(path, index=False)
+        outputs[method] = path
+
+    return outputs
 
 
 def load_oncogene_feature_sets(
     data_dir: str | Path,
     *,
+    feature_dir: str | Path | None = None,
+    dataset_paths: Mapping[str, str | Path] | None = None,
     density_name: str = "dataset_trimmed_v3.csv",
     pearson_name: str = "pearson.csv",
     spearman_name: str = "spearman.csv",
@@ -767,37 +969,45 @@ def load_oncogene_feature_sets(
     bicor_name: str = "bicor.csv",
     oncogene_name: str = "oncogene.txt",
     oncogene_path: str | Path | None = None,
+    label_path: str | Path | None = None,
+    positive_label_extras: Sequence[str] = (),
 ) -> tuple[dict[str, tuple[pd.DataFrame, pd.DataFrame]], pd.DataFrame]:
     root = Path(data_dir)
-    dataset_paths = {
-        "PDM": root / "Trimmed data" / density_name,
-        "Pearson": root / "Trimmed data" / pearson_name,
-        "Spearman": root / "Trimmed data" / spearman_name,
-        "MutualInfo": root / "Trimmed data" / mi_name,
-        "Bicor": root / "Trimmed data" / bicor_name,
-    }
-    oncogene_file = Path(oncogene_path) if oncogene_path is not None else root / oncogene_name
-    oncogene_set = set(pd.read_csv(oncogene_file).iloc[:, 0].astype(str).str.strip())
-    oncogene_set.add("MYCL")
+    feature_root = Path(feature_dir) if feature_dir is not None else root / "Trimmed data"
+    paths = (
+        {name: Path(path) for name, path in dataset_paths.items()}
+        if dataset_paths is not None
+        else {
+            "PDM": feature_root / density_name,
+            "Pearson": feature_root / pearson_name,
+            "Spearman": feature_root / spearman_name,
+            "MutualInfo": feature_root / mi_name,
+            "Bicor": feature_root / bicor_name,
+        }
+    )
+    resolved_label_path = label_path or oncogene_path
+    label_file = Path(resolved_label_path) if resolved_label_path is not None else root / oncogene_name
+    positive_set = set(pd.read_csv(label_file).iloc[:, 0].astype(str).str.strip())
+    positive_set.update(str(value).strip() for value in positive_label_extras if str(value).strip())
 
     data_dict: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     combined = pd.DataFrame()
 
-    for name, path in dataset_paths.items():
+    for name, path in paths.items():
         if not path.exists():
             continue
         dataset = pd.read_csv(path).dropna().reset_index(drop=True)
-        label = dataset.iloc[:, 0].astype(str).str.strip().isin(oncogene_set)
+        label = dataset.iloc[:, 0].astype(str).str.strip().isin(positive_set)
         positive = dataset.loc[label].reset_index(drop=True)
         negative = dataset.loc[~label].reset_index(drop=True)
         data_dict[name] = (positive, negative)
         if combined.empty and name == "PDM":
-            combined = dataset.assign(oncogene=label.to_numpy())
+            combined = dataset.assign(positive_label=label.to_numpy())
 
     return data_dict, combined
 
 
-def rank_candidate_oncogenes(
+def rank_candidate_genes(
     positive: pd.DataFrame,
     negative: pd.DataFrame,
     *,
@@ -805,6 +1015,7 @@ def rank_candidate_oncogenes(
     model: str = "GBR",
     ks_test: bool = True,
     features_left: int | None = None,
+    id_column_name: str | None = None,
     progress: bool = False,
 ) -> pd.DataFrame:
     from pdm_learn.modeling import core_predict
@@ -817,15 +1028,45 @@ def rank_candidate_oncogenes(
         ks_test=ks_test,
         features_left=features_left,
         progress=progress,
-        progress_desc="Oncogene ranking trials",
+        progress_desc="Gene ranking trials",
     )
     output = pd.DataFrame(
         {
-            "gene name": negative.iloc[:, 0].to_numpy(),
+            id_column_name or str(negative.columns[0]): negative.iloc[:, 0].to_numpy(),
             "score": scores,
         }
     )
     return output.sort_values("score", ascending=False).reset_index(drop=True)
+
+
+def rank_candidate_oncogenes(
+    positive: pd.DataFrame,
+    negative: pd.DataFrame,
+    *,
+    trials: int = 100,
+    model: str = "GBR",
+    ks_test: bool = True,
+    features_left: int | None = None,
+    progress: bool = False,
+) -> pd.DataFrame:
+    return rank_candidate_genes(
+        positive,
+        negative,
+        trials=trials,
+        model=model,
+        ks_test=ks_test,
+        features_left=features_left,
+        progress=progress,
+    )
+
+
+GeneDatasetSpec = OncogeneDatasetSpec
+GenePairSpec = OncogenePairSpec
+build_gene_density_features = build_oncogene_density_features
+build_gene_correlation_features = build_oncogene_correlation_features
+build_gene_statistic_features = build_oncogene_statistic_features
+save_gene_feature_tables = save_oncogene_feature_tables
+load_gene_feature_sets = load_oncogene_feature_sets
 
 
 def evaluate_method_curves(

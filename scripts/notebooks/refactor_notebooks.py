@@ -6,7 +6,7 @@ import re
 from pathlib import Path, PurePosixPath
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks"
 NOTEBOOKS = sorted(path for path in NOTEBOOK_ROOT.rglob("*.ipynb"))
 
