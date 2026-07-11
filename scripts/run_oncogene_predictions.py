@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--curve-trials", type=int, default=25)
     parser.add_argument("--feature-sweep-trials", type=int, default=20)
     parser.add_argument("--features-left", type=int, default=None)
+    parser.add_argument("--oncogene", type=Path, default=None, help="One-column known-oncogene list.")
     return parser.parse_args()
 
 
@@ -31,9 +32,15 @@ def main() -> None:
     results_dir = args.artifacts_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    data_dict, _ = load_oncogene_feature_sets(args.data_dir, density_name=args.density_name)
+    print("Loading oncogene feature tables and known-oncogene list...")
+    data_dict, _ = load_oncogene_feature_sets(
+        args.data_dir,
+        density_name=args.density_name,
+        oncogene_path=args.oncogene,
+    )
     positive, negative = data_dict["PDM"]
 
+    print(f"Ranking candidate oncogenes with {args.ranking_trials} trials...")
     ranking = rank_candidate_oncogenes(
         positive,
         negative,
@@ -41,12 +48,15 @@ def main() -> None:
         model=args.model,
         ks_test=True,
         features_left=args.features_left,
+        progress=True,
     )
     ranking_path = results_dir / "oncogene_ranking.csv"
     ranking.to_csv(ranking_path, index=False)
 
+    print("Benchmarking feature sets...")
     curve_rows = []
     for name, (pos, neg) in data_dict.items():
+        print(f"  {name}")
         pos_values = pos.iloc[:, 1:].to_numpy()
         neg_values = neg.iloc[:, 1:].to_numpy()
         use_ks = name == "PDM"
@@ -57,6 +67,7 @@ def main() -> None:
             model=args.model,
             ks_test=use_ks,
             features_left=args.features_left,
+            progress=True,
         )
         loocv_area = LOOCV(
             pos_values,
@@ -71,6 +82,7 @@ def main() -> None:
     benchmark_path = results_dir / "oncogene_method_benchmarks.csv"
     pd.DataFrame(curve_rows).to_csv(benchmark_path, index=False)
 
+    print("Running feature-count sweep...")
     feature_counts = [10, 20, 50, 100, 124, 150, 200, 250, 300, 349]
     sweep_areas = area_table(
         positive.iloc[:, 1:].to_numpy(),
@@ -82,6 +94,7 @@ def main() -> None:
     sweep_path = results_dir / "oncogene_feature_sweep.csv"
     pd.DataFrame({"features_left": feature_counts, "loocv_area": sweep_areas}).to_csv(sweep_path, index=False)
 
+    print("Computing KS p-values...")
     p_values = ks_pvalue(positive.iloc[:, 1:].to_numpy(), negative.iloc[:, 1:].to_numpy())
     pvalue_path = results_dir / "oncogene_ks_pvalues.csv"
     pd.DataFrame({"feature": positive.columns[1:], "ks_pvalue": p_values, "log10_ks_pvalue": np.log10(np.clip(p_values, 1e-300, None))}).to_csv(

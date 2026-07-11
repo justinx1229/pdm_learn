@@ -18,6 +18,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
+from tqdm.auto import tqdm
 
 try:
     import xgboost as xgb
@@ -188,6 +189,8 @@ def core_predict(
     model: str = "GBR",
     ks_test: bool = False,
     features_left: int | None = None,
+    progress: bool = False,
+    progress_desc: str = "Prediction trials",
 ):
     positive_array = np.asarray(positive)
     negative_array = np.asarray(negative)
@@ -217,7 +220,7 @@ def core_predict(
         axis=1,
     )
 
-    for _ in range(trials):
+    for _ in tqdm(range(trials), desc=progress_desc, disable=not progress):
         mat = np.concatenate([pos, neg[index : index + size, 1:]])
         X = mat[:, :-1]
         y = mat[:, -1]
@@ -245,12 +248,13 @@ def LOOCV(
     features_left: int | None = None,
     graph: bool = False,
     equation: bool = False,
+    progress: bool = False,
 ):
     positive_array = np.asarray(positive)
     negative_array = np.asarray(negative)
 
     ranks = []
-    for i in range(len(positive_array)):
+    for i in tqdm(range(len(positive_array)), desc="LOOCV positives", disable=not progress):
         result = np.concatenate(
             [
                 [np.append(np.zeros(len(negative_array)), 1)],

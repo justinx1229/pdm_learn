@@ -37,6 +37,7 @@ def main() -> None:
         model=args.model,
         ks_test=True,
         features_left=args.features_left,
+        progress=True,
     )
     ranking_path = results_dir / "ranked_PPI_pairs_cancer.csv"
     ranking.to_csv(ranking_path, index=False)
@@ -53,6 +54,7 @@ def main() -> None:
                 negative_controls,
                 model="XGB",
                 features_left=50,
+                progress=True,
             )
             benchmark_path = results_dir / "ppi_control_benchmarks.csv"
             benchmark.to_csv(benchmark_path, index=False)

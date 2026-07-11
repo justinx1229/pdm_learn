@@ -9,7 +9,7 @@ The reviewer-facing code is organized around a small reusable Python package in
 reproduction path; notebooks are companion walkthroughs for inspection and
 exploration.
 
-## Reproducibility Quick Start
+## Installation / Setup
 
 `uv` is the recommended environment manager because it uses `uv.lock` as the
 dependency lockfile and installs `pdm_learn` in editable mode.
@@ -35,9 +35,13 @@ The test suite currently covers the shared preprocessing, simulation, modeling,
 and PPI helpers:
 
 ```text
-Ran 25 tests
+Ran 27 tests
 OK
 ```
+
+Run all workflow commands from the repository root. The examples below prefix
+script calls with `PYTHONPATH=src` so Python can find `pdm_learn` even if the
+editable install has not been activated in the current shell.
 
 ## Publication-Ready Repository Layout
 
@@ -70,7 +74,9 @@ not part of the main reproduction path.
 ## Data Manifest
 
 Large data files are intentionally ignored by git. To reproduce the analyses,
-place the required files under `data/` with the paths below.
+place the required files under `data/` with the paths below, or pass explicit
+file paths to the scripts. Users do not need to rename their own local files if
+they provide the corresponding command-line flag.
 
 ### Oncogene / DepMap Inputs
 
@@ -87,9 +93,11 @@ data/raw/Avana_gene_effect_20Q3.csv
 ```
 
 It writes intermediate `trimmed_Wei` files under `data/DepMap_data/` and then
-derives the shared analysis-ready files under `data/DepMap_Trimmed/`. Oncogene
-and PPI analysis both require the shared `data/DepMap_Trimmed/*_Trimmed.csv`
-files.
+derives the shared analysis-ready files under `data/DepMap_Trimmed/`. The
+intermediate files preserve assay-specific cleaned versions of the raw exports.
+The required shared trimmed files are the harmonized matrices used by the main
+oncogene and PPI scripts after intersecting genes/cell lines and applying the
+shared preprocessing rules.
 
 Intermediate files:
 
@@ -111,6 +119,11 @@ data/DepMap_Trimmed/Gene_Mutation_Trimmed.csv
 data/DepMap_Trimmed/CRISPR_Trimmed.csv
 data/oncogene.txt
 ```
+
+`data/oncogene.txt` is a user-provided one-column list of known oncogenes used
+to label positives for the oncogene-ranking step. If the file has another name
+or location, pass it with `--oncogene` when running
+`scripts/run_oncogene_predictions.py`.
 
 Optional related inputs present in the local workflow:
 
@@ -137,6 +150,10 @@ data/DepMap_Trimmed/Gene_Mutation_Trimmed.csv
 data/DepMap_Trimmed/CRISPR_Trimmed.csv
 data/clean_biogrid_interactions.csv
 ```
+
+If your BioGRID pair table has a different filename or location, pass it with
+`--biogrid /path/to/your_pairs.csv` when running `scripts/make_ppi_features.py`.
+The table must contain either `Gene_A`/`Gene_B` or `Gene1`/`Gene2` columns.
 
 PPI controls and ranking also use the curated cancer-complex workbook at:
 
@@ -173,7 +190,7 @@ Generate the shared `data/DepMap_Trimmed/*_Trimmed.csv` inputs. These are the
 required inputs for both oncogene and PPI analyses.
 
 ```bash
-uv run python scripts/make_trimmed_inputs.py
+PYTHONPATH=src uv run python scripts/make_trimmed_inputs.py
 ```
 
 Main outputs:
@@ -190,7 +207,18 @@ If you already have the intermediate `data/DepMap_data/*_trimmed_Wei.csv` files
 and only need to recreate the required shared trimmed files, run:
 
 ```bash
-uv run python scripts/make_trimmed_inputs.py --from-intermediate
+PYTHONPATH=src uv run python scripts/make_trimmed_inputs.py --from-intermediate
+```
+
+To use files with non-default names, pass the paths directly, for example:
+
+```bash
+PYTHONPATH=src uv run python scripts/make_trimmed_inputs.py \
+  --expression /path/to/expression.csv \
+  --copy-number /path/to/copy_number.csv \
+  --shrna /path/to/shrna.csv \
+  --mutation /path/to/mutation.csv \
+  --crispr /path/to/crispr.csv
 ```
 
 ### 2. Oncogene Analysis
@@ -199,9 +227,17 @@ Build feature tables, run rankings/benchmarks, and export heatmap-ready
 statistics:
 
 ```bash
-uv run python scripts/make_oncogene_features.py
-uv run python scripts/run_oncogene_predictions.py
+PYTHONPATH=src uv run python scripts/make_oncogene_features.py
+PYTHONPATH=src uv run python scripts/run_oncogene_predictions.py
 ```
+
+`make_oncogene_features.py` creates PDM, Pearson, Spearman, mutual-information,
+and bicor feature tables for each gene. `run_oncogene_predictions.py` uses
+`oncogene.txt` to split known oncogenes from candidates, then writes ranking and
+benchmark summaries. To use already-trimmed files with other names, pass
+`--expression`, `--copy-number`, `--shrna`, `--mutation`, and `--crispr` to
+`make_oncogene_features.py`; pass `--oncogene` to use a non-default oncogene
+list.
 
 Main outputs:
 
@@ -222,9 +258,13 @@ artifacts/results/oncogene_ks_pvalues.csv
 Generate simulated associations/features and benchmark feature representations:
 
 ```bash
-uv run python scripts/make_simulation_features.py
-uv run python scripts/run_simulation_benchmarks.py
+PYTHONPATH=src uv run python scripts/make_simulation_features.py
+PYTHONPATH=src uv run python scripts/run_simulation_benchmarks.py
 ```
+
+The first command creates simulated positive/negative associations and their
+feature representations. The second command checks whether the modeling
+pipeline recovers the simulated positives from the negatives.
 
 Main outputs:
 
@@ -249,10 +289,19 @@ Generate PPI controls, build BioGRID PDM features, and rank candidate
 cancer-complex pairs:
 
 ```bash
-uv run python scripts/make_ppi_controls.py
-uv run python scripts/make_ppi_features.py
-uv run python scripts/run_ppi_predictions.py
+PYTHONPATH=src uv run python scripts/make_ppi_controls.py
+PYTHONPATH=src uv run python scripts/make_ppi_features.py
+PYTHONPATH=src uv run python scripts/run_ppi_predictions.py
 ```
+
+`make_ppi_controls.py` samples positive cancer-complex controls and negative
+control pairs, then builds PDM features for those controls. The default
+`--negative-pairs 5000` gives a larger control set but can be slow on laptops;
+for a faster smoke test, use a smaller value such as `--negative-pairs 1000`.
+`make_ppi_features.py` builds PDM features for BioGRID pairs. Use `--biogrid`
+if your pair list is not named `data/clean_biogrid_interactions.csv`, and use
+the same trimmed-file override flags listed in the oncogene step if your shared
+DepMap files have custom paths.
 
 Main outputs:
 
@@ -268,9 +317,16 @@ artifacts/results/ppi_control_benchmarks.csv
 After generating PPI controls/results, run the validation utilities:
 
 ```bash
-uv run python scripts/check_biogrid_matches_controls.py
-uv run python scripts/check_complex_pairs_in_biogrid.py
+PYTHONPATH=src uv run python scripts/check_biogrid_matches_controls.py
+PYTHONPATH=src uv run python scripts/check_complex_pairs_in_biogrid.py
 ```
+
+These utilities are sanity checks. `check_biogrid_matches_controls.py` reports
+how many sampled positive-control pairs also appear in the BioGRID feature
+table and whether any control rows are entirely missing feature values. Missing
+pairs are useful diagnostics about BioGRID coverage; a short printed missing
+list does not necessarily mean the previous scripts failed. The second utility
+reports which curated cancer-complex pairs are present in BioGRID.
 
 ### 5. Figures
 
@@ -278,8 +334,12 @@ After the analysis scripts have written their result tables, generate scripted
 figure files with:
 
 ```bash
-uv run python scripts/make_figures.py
+PYTHONPATH=src uv run python scripts/make_figures.py
 ```
+
+`oncogene_ks_heatmaps.png` summarizes feature-wise KS enrichment across the
+oncogene feature blocks. `simulation_positive_heatmap.png` shows the density
+map for a simulated positive association.
 
 Main outputs:
 
@@ -338,7 +398,7 @@ If notebooks pick up duplicated helper functions or machine-specific paths
 again, rerun:
 
 ```bash
-uv run python scripts/refactor_notebooks.py
+PYTHONPATH=src uv run python scripts/refactor_notebooks.py
 ```
 
 The setup cells define:

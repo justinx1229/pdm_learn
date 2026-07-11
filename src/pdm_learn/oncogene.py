@@ -10,6 +10,7 @@ import seaborn as sns
 from scipy import stats
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.metrics import mutual_info_score
+from tqdm.auto import tqdm
 
 from pdm_learn.modeling import KFold_PR, LOOCV
 from pdm_learn.preprocessing import densitymap, drop_nan
@@ -337,35 +338,47 @@ def _row_lookup(dataframe: pd.DataFrame) -> dict[str, np.ndarray]:
     }
 
 
-def load_oncogene_inputs(data_dir: str | Path) -> dict[str, pd.DataFrame]:
-    return load_shared_trimmed_oncogene_inputs(data_dir)
+def load_oncogene_inputs(
+    data_dir: str | Path,
+    *,
+    input_paths: Mapping[str, str | Path] | None = None,
+) -> dict[str, pd.DataFrame]:
+    return load_shared_trimmed_oncogene_inputs(data_dir, input_paths=input_paths)
 
 
-def load_shared_trimmed_oncogene_inputs(data_dir: str | Path) -> dict[str, pd.DataFrame]:
+def load_shared_trimmed_oncogene_inputs(
+    data_dir: str | Path,
+    *,
+    input_paths: Mapping[str, str | Path] | None = None,
+) -> dict[str, pd.DataFrame]:
     root = Path(data_dir)
+    input_paths = input_paths or {}
+
+    def path_for(name: str) -> Path:
+        return Path(input_paths.get(name, root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES[name]))
 
     gene_exp = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["expression"])
+        pd.read_csv(path_for("expression"))
     )
     gene_exp.name = "gene_exp"
 
     copy_num = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["copy_number"])
+        pd.read_csv(path_for("copy_number"))
     )
     copy_num.name = "copy_num"
 
     shrna = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["shrna"])
+        pd.read_csv(path_for("shrna"))
     )
     shrna.name = "shRNA"
 
     gene_mut = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["mutation"], low_memory=False)
+        pd.read_csv(path_for("mutation"), low_memory=False)
     )
     gene_mut.name = "gene_mut"
 
     crispr = _standardize_gene_names(
-        pd.read_csv(root / "DepMap_Trimmed" / SHARED_TRIMMED_FILENAMES["crispr"])
+        pd.read_csv(path_for("crispr"))
     )
     crispr.name = "CRISPR"
 
@@ -476,6 +489,7 @@ def build_oncogene_density_features(
     boxes: int = 7,
     copy_number_levels: Sequence[float] = COPY_NUMBER_LEVELS,
     log_offset: float | None = None,
+    progress: bool = False,
 ) -> pd.DataFrame:
     genes = oncogene_gene_list(datasets)
     dataset = pd.DataFrame({"gene name": genes})
@@ -483,7 +497,10 @@ def build_oncogene_density_features(
 
     discrete_levels = np.asarray(copy_number_levels, dtype=float)
 
-    for left_name, right_name, flags in ONCOGENE_PAIRS:
+    pair_iterator = tqdm(ONCOGENE_PAIRS, desc="Oncogene PDM feature blocks", disable=not progress)
+    for left_name, right_name, flags in pair_iterator:
+        pair_label = f"{left_name} vs {right_name}"
+        pair_iterator.set_postfix_str(pair_label)
         is_mut = "mut" in flags
         is_cn = "cn" in flags
 
@@ -505,7 +522,7 @@ def build_oncogene_density_features(
         if is_mut and is_cn:
             left_rows = _row_lookup(df1_t)
             right_rows = _row_lookup(df2_t)
-            for gene_name in df2_t.iloc[:, 0]:
+            for gene_name in tqdm(df2_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
                 x = _extract_density_values(left_rows[gene_name], cutoff=False)
                 y = _extract_density_values(right_rows[gene_name], cutoff=False)
                 x, y = drop_nan(x, y)
@@ -525,7 +542,7 @@ def build_oncogene_density_features(
             sigma = float(np.nanstd(df2_t.iloc[:, 1:].to_numpy(dtype=float)))
             if not np.isfinite(sigma) or sigma == 0:
                 sigma = 1.0
-            for gene_name in df2_t.iloc[:, 0]:
+            for gene_name in tqdm(df2_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
                 x = _extract_density_values(left_rows[gene_name], cutoff=False)
                 y, y_centers = _extract_density_values(
                     right_rows[gene_name],
@@ -551,7 +568,7 @@ def build_oncogene_density_features(
             sigma = float(np.nanstd(df1_t.iloc[:, 1:].to_numpy(dtype=float)))
             if not np.isfinite(sigma) or sigma == 0:
                 sigma = 1.0
-            for gene_name in df1_t.iloc[:, 0]:
+            for gene_name in tqdm(df1_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
                 x, x_centers = _extract_density_values(
                     left_rows[gene_name],
                     cutoff=True,
@@ -592,7 +609,7 @@ def build_oncogene_density_features(
                 y_std = 1.0
             if not np.isfinite(sigma) or sigma == 0:
                 sigma = 1.0
-            for gene_name in df1_t.iloc[:, 0]:
+            for gene_name in tqdm(df1_t.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
                 x, x_centers = _extract_density_values(
                     left_rows[gene_name],
                     cutoff=True,
@@ -632,6 +649,7 @@ def build_oncogene_statistic_features(
     datasets: Mapping[str, pd.DataFrame],
     *,
     method: str = "pearson",
+    progress: bool = False,
 ) -> pd.DataFrame:
     if method not in {"pearson", "spearman", "mi", "bicor"}:
         raise ValueError("method must be 'pearson', 'spearman', 'mi', or 'bicor'")
@@ -640,7 +658,14 @@ def build_oncogene_statistic_features(
     dataset = pd.DataFrame({"gene name": genes})
     gene_index = {gene: index for index, gene in enumerate(genes)}
 
-    for left_name, right_name, _ in ONCOGENE_PAIRS:
+    pair_iterator = tqdm(
+        ONCOGENE_PAIRS,
+        desc=f"Oncogene {method} feature blocks",
+        disable=not progress,
+    )
+    for left_name, right_name, _ in pair_iterator:
+        pair_label = f"{left_name} vs {right_name}"
+        pair_iterator.set_postfix_str(pair_label)
         temp = pd.DataFrame(np.nan, index=range(len(genes)), columns=[f"{left_name}.{right_name}"])
 
         if left_name == "gene_mut":
@@ -653,7 +678,7 @@ def build_oncogene_statistic_features(
         x_discrete = left_name == "gene_mut"
         y_discrete = right_name == "copy_num"
 
-        for gene_name in left_df.iloc[:, 0]:
+        for gene_name in tqdm(left_df.iloc[:, 0], desc=pair_label, disable=not progress, leave=False):
             x = left_rows[gene_name]
             y = right_rows[gene_name]
             x, y = drop_nan(x, y)
@@ -685,28 +710,43 @@ def build_oncogene_statistic_features(
 def save_oncogene_feature_tables(
     data_dir: str | Path,
     *,
+    input_paths: Mapping[str, str | Path] | None = None,
     density_name: str = "dataset_trimmed_v3.csv",
     pearson_name: str = "pearson.csv",
     spearman_name: str = "spearman.csv",
     mi_name: str = "mi.csv",
     bicor_name: str = "bicor.csv",
+    verbose: bool = False,
+    progress: bool = False,
 ) -> dict[str, Path]:
     root = Path(data_dir)
     output_dir = root / "Trimmed data"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    datasets = load_oncogene_inputs(root)
+    if verbose:
+        print("Loading shared DepMap input tables...")
+    datasets = load_oncogene_inputs(root, input_paths=input_paths)
     density_path = output_dir / density_name
     pearson_path = output_dir / pearson_name
     spearman_path = output_dir / spearman_name
     mi_path = output_dir / mi_name
     bicor_path = output_dir / bicor_name
 
-    build_oncogene_density_features(datasets).to_csv(density_path, index=False)
-    build_oncogene_statistic_features(datasets, method="pearson").to_csv(pearson_path, index=False)
-    build_oncogene_statistic_features(datasets, method="spearman").to_csv(spearman_path, index=False)
-    build_oncogene_statistic_features(datasets, method="mi").to_csv(mi_path, index=False)
-    build_oncogene_statistic_features(datasets, method="bicor").to_csv(bicor_path, index=False)
+    if verbose:
+        print(f"Building PDM density features -> {density_path}")
+    build_oncogene_density_features(datasets, progress=progress).to_csv(density_path, index=False)
+    if verbose:
+        print(f"Building Pearson features -> {pearson_path}")
+    build_oncogene_statistic_features(datasets, method="pearson", progress=progress).to_csv(pearson_path, index=False)
+    if verbose:
+        print(f"Building Spearman features -> {spearman_path}")
+    build_oncogene_statistic_features(datasets, method="spearman", progress=progress).to_csv(spearman_path, index=False)
+    if verbose:
+        print(f"Building mutual-information features -> {mi_path}")
+    build_oncogene_statistic_features(datasets, method="mi", progress=progress).to_csv(mi_path, index=False)
+    if verbose:
+        print(f"Building bicor features -> {bicor_path}")
+    build_oncogene_statistic_features(datasets, method="bicor", progress=progress).to_csv(bicor_path, index=False)
 
     return {
         "density": density_path,
@@ -726,6 +766,7 @@ def load_oncogene_feature_sets(
     mi_name: str = "mi.csv",
     bicor_name: str = "bicor.csv",
     oncogene_name: str = "oncogene.txt",
+    oncogene_path: str | Path | None = None,
 ) -> tuple[dict[str, tuple[pd.DataFrame, pd.DataFrame]], pd.DataFrame]:
     root = Path(data_dir)
     dataset_paths = {
@@ -735,7 +776,8 @@ def load_oncogene_feature_sets(
         "MutualInfo": root / "Trimmed data" / mi_name,
         "Bicor": root / "Trimmed data" / bicor_name,
     }
-    oncogene_set = set(pd.read_csv(root / oncogene_name).iloc[:, 0].astype(str).str.strip())
+    oncogene_file = Path(oncogene_path) if oncogene_path is not None else root / oncogene_name
+    oncogene_set = set(pd.read_csv(oncogene_file).iloc[:, 0].astype(str).str.strip())
     oncogene_set.add("MYCL")
 
     data_dict: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
@@ -763,6 +805,7 @@ def rank_candidate_oncogenes(
     model: str = "GBR",
     ks_test: bool = True,
     features_left: int | None = None,
+    progress: bool = False,
 ) -> pd.DataFrame:
     from pdm_learn.modeling import core_predict
 
@@ -773,6 +816,8 @@ def rank_candidate_oncogenes(
         model=model,
         ks_test=ks_test,
         features_left=features_left,
+        progress=progress,
+        progress_desc="Oncogene ranking trials",
     )
     output = pd.DataFrame(
         {

@@ -89,6 +89,20 @@ class OncogeneTrimmingTests(unittest.TestCase):
             self.assertEqual(set(datasets), {"gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR"})
             self.assertEqual(datasets["gene_mut"].shape, (2, 3))
 
+    def test_load_oncogene_inputs_accepts_explicit_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = {}
+            for key in ("expression", "copy_number", "shrna", "mutation", "crispr"):
+                path = root / f"custom_{key}.csv"
+                pd.DataFrame({"gene name": ["A"], "CL1": [1.0]}).to_csv(path, index=False)
+                paths[key] = path
+
+            datasets = load_oncogene_inputs(root, input_paths=paths)
+
+            self.assertEqual(set(datasets), {"gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR"})
+            self.assertEqual(datasets["gene_exp"].iloc[0, 0], "A")
+
     def test_mutation_to_reference_accepts_binary_matrix(self) -> None:
         mutation = pd.DataFrame({"gene name": ["A", "B"], "CL1": [1, 0], "CL2": [0, 1], "CL3": [1, 1]})
         reference = pd.DataFrame({"gene name": ["A", "B", "C"], "CL2": [0.0, 0.0, 0.0], "CL1": [0.0, 0.0, 0.0]})

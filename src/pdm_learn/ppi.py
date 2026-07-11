@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from sklearn.metrics import roc_auc_score
+from tqdm.auto import tqdm
 
 from pdm_learn.modeling import _build_predictor, _predict_scores
 from pdm_learn.preprocessing import build_density_map, density_centers
@@ -163,14 +164,19 @@ def derive_shared_trimmed_inputs(
     return outputs
 
 
-def load_ppi_inputs(data_dir: str | Path) -> dict[str, pd.DataFrame]:
+def load_ppi_inputs(
+    data_dir: str | Path,
+    *,
+    input_paths: dict[str, str | Path] | None = None,
+) -> dict[str, pd.DataFrame]:
     root = Path(data_dir)
+    input_paths = input_paths or {}
     paths = {
-        "gene_exp": root / "DepMap_Trimmed" / "Gene_Expression_Trimmed.csv",
-        "copy_num": root / "DepMap_Trimmed" / "Copy_Number_Trimmed.csv",
-        "shRNA": root / "DepMap_Trimmed" / "shRNA_Trimmed.csv",
-        "gene_mut": root / "DepMap_Trimmed" / "Gene_Mutation_Trimmed.csv",
-        "CRISPR": root / "DepMap_Trimmed" / "CRISPR_Trimmed.csv",
+        "gene_exp": Path(input_paths.get("expression", root / "DepMap_Trimmed" / "Gene_Expression_Trimmed.csv")),
+        "copy_num": Path(input_paths.get("copy_number", root / "DepMap_Trimmed" / "Copy_Number_Trimmed.csv")),
+        "shRNA": Path(input_paths.get("shrna", root / "DepMap_Trimmed" / "shRNA_Trimmed.csv")),
+        "gene_mut": Path(input_paths.get("mutation", root / "DepMap_Trimmed" / "Gene_Mutation_Trimmed.csv")),
+        "CRISPR": Path(input_paths.get("crispr", root / "DepMap_Trimmed" / "CRISPR_Trimmed.csv")),
     }
     datasets = {}
     for name, path in paths.items():
@@ -221,6 +227,8 @@ def build_ppi_feature_table(
     *,
     gene1_column: str = "Gene1",
     gene2_column: str = "Gene2",
+    progress: bool = False,
+    progress_desc: str = "PPI PDM feature blocks",
 ) -> pd.DataFrame:
     genes = set(ppi_gene_universe(datasets))
     pairs = pair_table.copy()
@@ -238,6 +246,8 @@ def build_ppi_feature_table(
         pairs[[gene1_column, gene2_column]].to_numpy().tolist(),
         density_points,
         continuous,
+        progress=progress,
+        progress_desc=progress_desc,
     )
     return pd.concat([pairs.reset_index(drop=True), features.drop(columns=["pair"])], axis=1)
 
@@ -331,6 +341,7 @@ def build_control_feature_tables(
     max_pairs_per_complex: int = 5,
     negative_pairs: int = 5000,
     random_state: int = 42,
+    progress: bool = False,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     gene_universe = ppi_gene_universe(datasets)
     positive_pairs = []
@@ -338,7 +349,7 @@ def build_control_feature_tables(
     positive_features = []
     negative_features = []
 
-    for index in range(controls):
+    for index in tqdm(range(controls), desc="PPI control sets", disable=not progress):
         rng = np.random.default_rng(random_state + index)
         pos_pairs = sample_positive_control_pairs(
             cancer_complexes,
@@ -354,8 +365,22 @@ def build_control_feature_tables(
         )
         positive_pairs.append(pos_pairs)
         negative_pairs_out.append(neg_pairs)
-        positive_features.append(build_ppi_feature_table(datasets, pos_pairs))
-        negative_features.append(build_ppi_feature_table(datasets, neg_pairs))
+        positive_features.append(
+            build_ppi_feature_table(
+                datasets,
+                pos_pairs,
+                progress=progress,
+                progress_desc=f"Control {index + 1} positive PDM blocks",
+            )
+        )
+        negative_features.append(
+            build_ppi_feature_table(
+                datasets,
+                neg_pairs,
+                progress=progress,
+                progress_desc=f"Control {index + 1} negative PDM blocks",
+            )
+        )
 
     return positive_pairs, negative_pairs_out, positive_features, negative_features
 
@@ -376,9 +401,16 @@ def evaluate_ppi_controls(
     features_left: int | None = 50,
     heldout_complexes: int = 5,
     random_state: int = 42,
+    progress: bool = False,
 ) -> pd.DataFrame:
     rows = []
-    for index, (positive, negative) in enumerate(zip(positive_controls, negative_controls), start=1):
+    control_iterator = tqdm(
+        zip(positive_controls, negative_controls),
+        total=min(len(positive_controls), len(negative_controls)),
+        desc="PPI control benchmarks",
+        disable=not progress,
+    )
+    for index, (positive, negative) in enumerate(control_iterator, start=1):
         pos = positive.dropna().copy()
         neg = negative.dropna().copy()
         if pos.empty or neg.empty:
@@ -543,6 +575,7 @@ def rank_ppi_pairs_cancer(
     features_left: int | None = None,
     max_pairs_per_complex: int = 5,
     random_state: int = 1,
+    progress: bool = False,
 ) -> pd.DataFrame:
     data = biogrid_feature_table.copy()
     data["canonical_pair"] = [canonical_pair(a, b) for a, b in zip(data["Gene1"], data["Gene2"])]
@@ -562,7 +595,7 @@ def rank_ppi_pairs_cancer(
     score_iterations = np.zeros(len(model_data))
     rng = np.random.default_rng(random_state)
 
-    for _ in range(trials):
+    for _ in tqdm(range(trials), desc="PPI ranking trials", disable=not progress):
         sampled_pairs = sampled_cancer_complex_pair_set(
             cancer_complexes,
             max_pairs_per_complex=max_pairs_per_complex,

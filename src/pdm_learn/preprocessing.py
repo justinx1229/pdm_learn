@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 
 def trim(dataframe: pd.DataFrame, genes: Sequence[str]) -> pd.DataFrame:
@@ -143,92 +144,105 @@ def build_density_map(
     pairs: Sequence[Sequence[str]],
     arg3: Sequence[object],
     arg4: Sequence[object],
+    *,
+    progress: bool = False,
+    progress_desc: str = "PDM feature blocks",
 ) -> pd.DataFrame:
     density_points, continuous = _resolve_density_map_arguments(arg3, arg4)
     output = pd.DataFrame({"pair": [f"{p1}.{p2}" for p1, p2 in pairs]})
 
-    for i in range(len(datasets)):
-        for j in range(len(datasets)):
-            df1 = datasets[i]
-            df2 = datasets[j]
+    dataset_blocks = [
+        (i, j)
+        for i in range(len(datasets))
+        for j in range(len(datasets))
+    ]
+    for i, j in tqdm(dataset_blocks, desc=progress_desc, disable=not progress):
+        df1 = datasets[i]
+        df2 = datasets[j]
 
-            mask = df1.columns.str.strip().isin(df2.columns.str.strip())
-            mask[0] = True
-            df1 = df1.loc[:, mask]
+        mask = df1.columns.str.strip().isin(df2.columns.str.strip())
+        mask[0] = True
+        df1 = df1.loc[:, mask]
 
-            mask = df2.columns.str.strip().isin(df1.columns.str.strip())
-            mask[0] = True
-            df2 = df2.loc[:, mask]
+        mask = df2.columns.str.strip().isin(df1.columns.str.strip())
+        mask[0] = True
+        df2 = df2.loc[:, mask]
 
-            df1_genes = set(df1.iloc[:, 0].astype(str).str.strip())
-            df2_genes = set(df2.iloc[:, 0].astype(str).str.strip())
+        df1_genes = set(df1.iloc[:, 0].astype(str).str.strip())
+        df2_genes = set(df2.iloc[:, 0].astype(str).str.strip())
 
-            df1_pts = density_points[i]
-            df2_pts = density_points[j]
-            df1_cont = continuous[i]
-            df2_cont = continuous[j]
+        df1_pts = density_points[i]
+        df2_pts = density_points[j]
+        df1_cont = continuous[i]
+        df2_cont = continuous[j]
 
-            feature_prefix_1 = getattr(datasets[i], "name", f"dataset_{i}")
-            feature_prefix_2 = getattr(datasets[j], "name", f"dataset_{j}")
-            feature_count = len(df1_pts) * len(df2_pts)
-            temp = pd.DataFrame(
-                index=range(len(output)),
-                columns=[
-                    f"{feature_prefix_1}.{feature_prefix_2}.{value}"
-                    for value in range(feature_count)
-                ],
-            )
+        feature_prefix_1 = getattr(datasets[i], "name", f"dataset_{i}")
+        feature_prefix_2 = getattr(datasets[j], "name", f"dataset_{j}")
+        feature_count = len(df1_pts) * len(df2_pts)
+        temp = pd.DataFrame(
+            index=range(len(output)),
+            columns=[
+                f"{feature_prefix_1}.{feature_prefix_2}.{value}"
+                for value in range(feature_count)
+            ],
+        )
 
-            if df1_cont:
-                if df2_cont:
-                    std = math.sqrt(
-                        (
-                            np.nanstd(df1.iloc[:, 1:].to_numpy()) ** 2
-                            + np.nanstd(df2.iloc[:, 1:].to_numpy()) ** 2
-                        )
-                        / 2
+        if df1_cont:
+            if df2_cont:
+                std = math.sqrt(
+                    (
+                        np.nanstd(df1.iloc[:, 1:].to_numpy()) ** 2
+                        + np.nanstd(df2.iloc[:, 1:].to_numpy()) ** 2
                     )
-                else:
-                    std = np.nanstd(df1.iloc[:, 1:].to_numpy())
-            else:
-                std = np.nanstd(df2.iloc[:, 1:].to_numpy())
-
-            nan_features = np.full(feature_count, np.nan, dtype=float)
-
-            for index, (p1, p2) in enumerate(pairs):
-                p1 = str(p1).strip()
-                p2 = str(p2).strip()
-                if p1 not in df1_genes or p2 not in df2_genes:
-                    temp.iloc[index] = nan_features
-                    continue
-
-                x = extract(df1, p1)
-                y = extract(df2, p2)
-                if isinstance(x, int) or isinstance(y, int):
-                    temp.iloc[index] = nan_features
-                    continue
-                x, y = drop_nan(x, y)
-                if len(x) == 0 or len(y) == 0:
-                    temp.iloc[index] = nan_features
-                    continue
-                matrix = densitymap(
-                    x,
-                    y,
-                    df1_pts,
-                    df2_pts,
-                    xdiscrete=not df1_cont,
-                    ydiscrete=not df2_cont,
-                    sigma=std,
+                    / 2
                 )
-                if isinstance(matrix, str):
-                    temp.iloc[index] = nan_features
-                    continue
-                temp.iloc[index] = matrix.flatten()
+            else:
+                std = np.nanstd(df1.iloc[:, 1:].to_numpy())
+        else:
+            std = np.nanstd(df2.iloc[:, 1:].to_numpy())
 
-            temp = temp.astype(float)
-            temp += 1 / len(df1.columns)
-            temp = temp.map(np.log)
-            output = pd.concat([output, temp], axis=1)
+        nan_features = np.full(feature_count, np.nan, dtype=float)
+
+        pair_iterator = tqdm(
+            pairs,
+            desc=f"{feature_prefix_1} vs {feature_prefix_2}",
+            disable=not progress,
+            leave=False,
+        )
+        for index, (p1, p2) in enumerate(pair_iterator):
+            p1 = str(p1).strip()
+            p2 = str(p2).strip()
+            if p1 not in df1_genes or p2 not in df2_genes:
+                temp.iloc[index] = nan_features
+                continue
+
+            x = extract(df1, p1)
+            y = extract(df2, p2)
+            if isinstance(x, int) or isinstance(y, int):
+                temp.iloc[index] = nan_features
+                continue
+            x, y = drop_nan(x, y)
+            if len(x) == 0 or len(y) == 0:
+                temp.iloc[index] = nan_features
+                continue
+            matrix = densitymap(
+                x,
+                y,
+                df1_pts,
+                df2_pts,
+                xdiscrete=not df1_cont,
+                ydiscrete=not df2_cont,
+                sigma=std,
+            )
+            if isinstance(matrix, str):
+                temp.iloc[index] = nan_features
+                continue
+            temp.iloc[index] = matrix.flatten()
+
+        temp = temp.astype(float)
+        temp += 1 / len(df1.columns)
+        temp = temp.map(np.log)
+        output = pd.concat([output, temp], axis=1)
 
     return output
 
