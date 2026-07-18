@@ -53,6 +53,8 @@ def _validate_inputs(positive: np.ndarray, negative: np.ndarray, trials: int) ->
         return "unable to create complete graph"
     if len(positive) > len(negative):
         return "unable to partition negatives"
+    if len(negative) < 2:
+        return "unable to partition negatives"
     if len(positive[0]) != len(negative[0]):
         return "inconsistent feature lengths"
     return None
@@ -204,6 +206,7 @@ def core_predict(
 
     index = 0
     size = len(pos)
+    train_negative_count = min(size, len(neg) - 1)
     scores = np.zeros(len(neg))
     number = np.zeros(len(neg))
 
@@ -221,22 +224,23 @@ def core_predict(
     )
 
     for _ in tqdm(range(trials), desc=progress_desc, disable=not progress):
-        mat = np.concatenate([pos, neg[index : index + size, 1:]])
+        train_indices = np.arange(index, index + train_negative_count)
+        mat = np.concatenate([pos, neg[train_indices, 1:]])
         X = mat[:, :-1]
         y = mat[:, -1]
 
         predictor = _build_predictor(model).fit(X, y)
-        neg_test = np.delete(neg, range(index, index + size), axis=0)
+        neg_test = np.delete(neg, train_indices, axis=0)
         for row_index, value in enumerate(_predict_scores(predictor, neg_test[:, 1:-1])):
             scores[int(neg_test[row_index, 0])] += value
             number[int(neg_test[row_index, 0])] += 1
 
-        index += size
-        if index + size > len(neg):
+        index += train_negative_count
+        if index + train_negative_count > len(neg):
             index = 0
             np.random.shuffle(neg)
 
-    return scores / number
+    return np.divide(scores, number, out=np.zeros_like(scores), where=number > 0)
 
 
 def LOOCV(
@@ -519,6 +523,8 @@ def KFold_PR(
     n_splits: int = 5,
     graph: bool = False,
     random_state: int = 42,
+    progress: bool = False,
+    progress_desc: str = "Precision-recall folds",
 ):
     positive_array = np.asarray(positive)
     negative_array = np.asarray(negative)
@@ -530,7 +536,8 @@ def KFold_PR(
     all_scores = []
     all_true = []
 
-    for train_idx, test_idx in splitter.split(X, y):
+    folds = splitter.split(X, y)
+    for train_idx, test_idx in tqdm(folds, total=n_splits, desc=progress_desc, disable=not progress):
         X_train = X[train_idx]
         y_train = y[train_idx]
         X_test = X[test_idx]

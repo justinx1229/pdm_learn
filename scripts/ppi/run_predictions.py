@@ -52,8 +52,8 @@ def main() -> None:
             benchmark = evaluate_ppi_controls(
                 positive_controls,
                 negative_controls,
-                model="XGB",
-                features_left=50,
+                model=args.model,
+                features_left=args.features_left,
                 progress=True,
             )
             benchmark_path = results_dir / "ppi_control_benchmarks.csv"

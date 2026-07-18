@@ -147,6 +147,35 @@ class OncogeneTrimmingTests(unittest.TestCase):
         self.assertEqual(output.columns[0], "gene name")
         self.assertTrue(all(column.startswith("assay_a.assay_b.") for column in output.columns[1:]))
 
+    def test_generic_density_features_allow_different_gene_column_headers(self) -> None:
+        datasets = {
+            "assay_a": pd.DataFrame(
+                {
+                    "Gene": ["A", "B"],
+                    "S1": [0.0, 1.0],
+                    "S2": [1.0, 2.0],
+                    "S3": [2.0, 3.0],
+                }
+            ),
+            "assay_b": pd.DataFrame(
+                {
+                    "Symbol": ["A", "B"],
+                    "S1": [2.0, 1.0],
+                    "S2": [1.0, 0.0],
+                    "S3": [0.0, -1.0],
+                }
+            ),
+        }
+
+        output = build_oncogene_density_features(
+            datasets,
+            pairs=[("assay_a", "assay_b")],
+            boxes=3,
+        )
+
+        self.assertEqual(output["gene name"].tolist(), ["A", "B"])
+        self.assertFalse(output.iloc[:, 1:].isna().any().any())
+
     def test_generic_binary_dataset_reindexes_to_reference_genes(self) -> None:
         datasets = {
             "binary_event": pd.DataFrame({"gene name": ["A"], "S1": [1.0], "S2": [0.0]}),

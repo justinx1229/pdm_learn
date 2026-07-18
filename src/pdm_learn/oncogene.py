@@ -321,6 +321,17 @@ def _normalize_rows(dataframe: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _select_gene_and_sample_columns(dataframe: pd.DataFrame, sample_columns: Sequence[str]) -> pd.DataFrame:
+    normalized_columns = pd.Index(dataframe.columns.astype(str).str.strip())
+    selected_columns = [dataframe.columns[0]]
+    for column in sample_columns:
+        matches = np.flatnonzero(normalized_columns == str(column).strip())
+        matches = matches[matches != 0]
+        if len(matches):
+            selected_columns.append(dataframe.columns[matches[0]])
+    return dataframe.loc[:, selected_columns].copy()
+
+
 def _trim_pair_dataframes(
     dataframe_1: pd.DataFrame,
     dataframe_2: pd.DataFrame,
@@ -333,10 +344,11 @@ def _trim_pair_dataframes(
     mask = df2.iloc[:, 0].isin(df1.iloc[:, 0])
     df2 = df2.loc[mask].copy()
 
-    shared_columns = df1.columns.str.strip().isin(df2.columns.str.strip())
-    df1 = df1.loc[:, shared_columns].copy()
-    shared_columns = df2.columns.str.strip().isin(df1.columns.str.strip())
-    df2 = df2.loc[:, shared_columns].copy()
+    df1_samples = set(df1.columns.astype(str).str.strip()[1:])
+    df2_samples = set(df2.columns.astype(str).str.strip()[1:])
+    shared_samples = sorted(df1_samples & df2_samples)
+    df1 = _select_gene_and_sample_columns(df1, shared_samples)
+    df2 = _select_gene_and_sample_columns(df2, shared_samples)
     return df1, df2
 
 
