@@ -1,13 +1,30 @@
 # PDM Learn
 
-This repository contains the code used to build and evaluate pairwise density map
-(PDM) features for DepMap/CCLE molecular profiles, protein-protein interaction
-(PPI) controls, simulated associations, and oncogene-ranking experiments.
+PDM Learn is an installable Python library for building and evaluating pairwise
+density-map (PDM) features from aligned entity-by-sample matrices. It includes
+generic loading, alignment, density/statistic feature construction, labels,
+ranking, and simulation utilities. DepMap/CCLE oncogene and protein-protein
+interaction (PPI) analyses are maintained recipes built on that core.
 
-The reviewer-facing code is organized around a small reusable Python package in
-`src/pdm_learn/`. Workflow-specific command-line scripts under `scripts/` are the canonical
-reproduction path; notebooks are companion walkthroughs for inspection and
-exploration.
+The library lives in `src/pdm_learn/`. Workflow scripts under `scripts/` are
+kept as reproducible examples; notebooks are optional walkthroughs.
+
+## Architecture
+
+The reusable package has a deliberately small, domain-neutral center:
+
+- `datasets.py`: `DatasetSpec`, CSV loading, matrix preparation, and alignment.
+- `features.py`: row-level PDM, Pearson, Spearman, MI, and bicor feature builders.
+- `pair_features.py`: the equivalent builders for tables of ordered entity pairs.
+- `labels.py`: label-file loading, row splitting, and class balancing.
+- `modeling.py`: candidate ranking, cross-validation, scoring, and feature selection.
+- `simulation.py`: general simulation utilities.
+
+`presets.py` holds optional DepMap defaults. `workflows/oncogene.py` and
+`workflows/ppi.py` are thin recipes that select those defaults and call the
+generic APIs. Historical `pdm_learn.oncogene` and `pdm_learn.ppi` imports remain
+available for compatibility, but new code should use the generic modules or
+`pdm_learn.workflows`.
 
 ## Installation / Setup
 
@@ -17,8 +34,13 @@ dependency lockfile and installs `pdm_learn` in editable mode.
 ```bash
 uv sync
 uv run python -m unittest discover -s tests
+uv build
 uv run jupyter lab
 ```
+
+To use the library from another project, build a wheel with `uv build` and
+install the generated file from `dist/`, or install this checkout directly with
+`pip install .`.
 
 If you prefer conda, use it only to create Python and install `uv`, then let
 `uv` install the locked project dependencies:
@@ -31,13 +53,8 @@ uv run python -m unittest discover -s tests
 uv run jupyter lab
 ```
 
-The test suite currently covers the shared preprocessing, simulation, modeling,
-and PPI helpers:
-
-```text
-Ran 27 tests
-OK
-```
+The test suite covers the public feature API and the shared preprocessing,
+simulation, modeling, oncogene, and PPI helpers.
 
 Run all workflow commands from the repository root. The examples below prefix
 script calls with `PYTHONPATH=src` so Python can find `pdm_learn` even if the
@@ -61,13 +78,11 @@ Keep the repository organized as follows for submission:
 │   └── simulation/              # simulated associations and benchmarking
 ├── scripts/                     # workflow-specific reproduction and validation commands
 │   ├── data/
-│   ├── generic/
 │   ├── oncogene/
 │   ├── ppi/
 │   ├── simulation/
 │   ├── validation/
-│   ├── figures/
-│   └── notebooks/
+│   └── figures/
 ├── archive/                     # historical/provenance notebooks, not reviewer workflow
 ├── data/                        # local raw/intermediate data, not committed
 ├── artifacts/                   # generated controls/results, not committed
@@ -180,7 +195,6 @@ data/simulated/*.csv
 data/PPI_Pairs/*.csv
 artifacts/controls/*.pkl
 artifacts/results/*.csv
-artifacts/generic/*
 figures/*
 ```
 
@@ -262,48 +276,45 @@ artifacts/results/oncogene_feature_sweep.csv
 artifacts/results/oncogene_ks_pvalues.csv
 ```
 
-### 3. Generic Gene-Level Analysis
+### 3. Generic Matrix Analysis
 
-For non-DepMap or non-oncogene datasets, use the fully generic scripts. Inputs
-are gene-by-sample matrices: one gene identifier column followed by matched
-sample columns. Dataset kinds are `continuous`, `binary`, or `discrete`;
-discrete datasets can provide levels with `--dataset-levels name=0,1,2`.
+For any aligned entity-by-sample CSVs, use the library API. An identifier can
+have any column name (and does not have to be first); declare it in
+`DatasetSpec`. Dataset names and feature pairs are arbitrary.
 
-```bash
-PYTHONPATH=src uv run python scripts/generic/make_features.py \
-  --input expression=/path/to/expression.csv \
-  --input methylation=/path/to/methylation.csv \
-  --input mutation=/path/to/binary_mutation.csv \
-  --dataset-kind expression=continuous \
-  --dataset-kind methylation=continuous \
-  --dataset-kind mutation=binary \
-  --pair expression:methylation \
-  --pair mutation:expression
+```python
+from pdm_learn import (
+    DatasetSpec,
+    FeaturePair,
+    build_features,
+    load_label_set,
+    load_matrices,
+    rank_candidates,
+)
 
-PYTHONPATH=src uv run python scripts/generic/run_predictions.py \
-  --label-file /path/to/positive_gene_labels.csv \
-  --label-name custom_label
+specs = [
+    DatasetSpec("expression", id_column="gene"),
+    DatasetSpec("mutation", kind="binary", normalize=None, id_column="symbol"),
+]
+datasets = load_matrices({
+    "expression": "expression.csv",
+    "mutation": "mutation.csv",
+}, specs=specs)
+features = build_features(
+    datasets,
+    specs=specs,
+    pairs=[FeaturePair("mutation", "expression")],
+    methods=["pdm", "pearson", "spearman", "mi", "bicor"],
+)
+labels = load_label_set("positive_entity_labels.csv")
+ranking = rank_candidates(features["pdm"], labels)
 ```
 
-`scripts/generic/make_features.py` writes a `feature_manifest.json` alongside
-the generated feature tables. `scripts/generic/run_predictions.py` reads that
-manifest by default, or accepts explicit feature tables with repeated
-`--feature NAME=/path/to/features.csv` flags.
-
-Main outputs:
-
-```text
-artifacts/generic/features/pdm.csv
-artifacts/generic/features/pearson.csv
-artifacts/generic/features/spearman.csv
-artifacts/generic/features/mi.csv
-artifacts/generic/features/bicor.csv
-artifacts/generic/features/feature_manifest.json
-artifacts/generic/results/custom_label_ranking.csv
-artifacts/generic/results/custom_label_feature_benchmarks.csv
-artifacts/generic/results/custom_label_feature_sweep.csv
-artifacts/generic/results/custom_label_ks_pvalues.csv
-```
+`features` contains one table per requested method. Use `FeatureConfig` for
+shared options such as density bins, log smoothing, missing-row behavior, and
+the union/intersection entity universe. For observations with two different
+row IDs—such as protein interactions—use `build_pair_features` and
+`PairFeatureConfig` instead.
 
 ### 4. Simulation Analysis
 
@@ -413,18 +424,20 @@ Launch companion notebooks with:
 uv run jupyter lab
 ```
 
-## Shared Python Package
+## Library API
 
-The reusable implementation lives in `src/pdm_learn/`:
+The package root re-exports the primary generic API:
 
-- `preprocessing.py`: trimming, missing-value handling, density-map generation
-- `simulation.py`: simulated pair generation and simulated feature tables
-- `modeling.py`: rank recovery, cross-validation, PR/ROC evaluation, plotting
-- `oncogene.py`: oncogene-specific input trimming, data loading, feature tables, ranking
-- `ppi.py`: PPI control generation, BioGRID feature tables, PPI ranking
+- `DatasetSpec`, `FeaturePair`, and `FeatureConfig` describe input matrices and feature blocks.
+- `load_matrices`, `prepare_matrix`, and `align_matrices` keep file I/O and matrix alignment separate from computation.
+- `build_features` builds row-level PDM and scalar association features from in-memory tables.
+- `build_pair_features` handles ordered pair tables without PPI-specific assumptions.
+- `load_label_set`, `split_labeled_rows`, `rank_candidates`/`rank_unlabeled`, and `evaluate_labeled_features` provide generic positive-label workflows.
 
-Prefer adding new analysis logic to this package and calling it from scripts.
-That keeps workflows testable and easier for reviewers to audit.
+Use `from pdm_learn.workflows import oncogene, ppi` when the maintained DepMap
+recipes are useful. The workflow modules provide `load_inputs`,
+`build_features`, and `rank_candidates` conveniences while keeping file
+layouts, assay names, and control sampling outside the core API.
 
 ## Generated Files And Version Control
 
@@ -446,14 +459,7 @@ Before submission:
 
 ## Notes For Maintainers
 
-If notebooks pick up duplicated helper functions or machine-specific paths
-again, rerun:
-
-```bash
-PYTHONPATH=src uv run python scripts/notebooks/refactor_notebooks.py
-```
-
-The setup cells define:
+Notebook setup cells should define:
 
 ```text
 PROJECT_ROOT

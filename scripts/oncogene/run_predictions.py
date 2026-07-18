@@ -41,30 +41,37 @@ def main() -> None:
     import numpy as np
     import pandas as pd
 
-    from pdm_learn.modeling import KFold_PR, LOOCV, area_table, ks_pvalue
-    from pdm_learn.oncogene import load_oncogene_feature_sets, rank_candidate_genes
+    from pdm_learn.labels import load_label_set, split_labeled_rows
+    from pdm_learn.modeling import KFold_PR, LOOCV, area_table, ks_pvalue, rank_candidates
 
     results_dir = args.artifacts_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading feature tables and positive-label list...")
     positive_extras = list(args.positive_extra)
-    data_dict, _ = load_oncogene_feature_sets(
-        args.data_dir,
-        feature_dir=args.feature_dir,
-        density_name=args.density_name,
-        oncogene_path=args.oncogene,
-        label_path=args.label_file,
-        positive_label_extras=positive_extras,
-    )
+    feature_dir = args.feature_dir or args.data_dir / "Trimmed data"
+    feature_paths = {
+        "PDM": feature_dir / args.density_name,
+        "Pearson": feature_dir / "pearson.csv",
+        "Spearman": feature_dir / "spearman.csv",
+        "MutualInfo": feature_dir / "mi.csv",
+        "Bicor": feature_dir / "bicor.csv",
+    }
+    label_path = args.label_file or args.oncogene or args.data_dir / "oncogene.txt"
+    positive_labels = load_label_set(label_path, header=None, labels=positive_extras)
+    data_dict = {
+        name: split_labeled_rows(pd.read_csv(path), positive_labels)
+        for name, path in feature_paths.items()
+        if path.exists()
+    }
     if "PDM" not in data_dict:
         raise FileNotFoundError("The PDM feature table was not found.")
     positive, negative = data_dict["PDM"]
 
     print(f"Ranking candidate genes with {args.ranking_trials} trials...")
-    ranking = rank_candidate_genes(
-        positive,
-        negative,
+    ranking = rank_candidates(
+        pd.read_csv(feature_paths["PDM"]),
+        positive_labels,
         trials=args.ranking_trials,
         model=args.model,
         ks_test=True,

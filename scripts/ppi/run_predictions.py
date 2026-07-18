@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pdm_learn.ppi import evaluate_ppi_controls, load_cancer_complexes, rank_ppi_pairs_cancer
+from pdm_learn.workflows.ppi import evaluate_ppi_controls, load_cancer_complexes, rank_candidates
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -30,7 +30,7 @@ def main() -> None:
 
     complexes = load_cancer_complexes(args.complexes)
     biogrid_features = pd.read_csv(args.biogrid_features, low_memory=False)
-    ranking = rank_ppi_pairs_cancer(
+    ranking = rank_candidates(
         biogrid_features,
         complexes,
         trials=args.trials,

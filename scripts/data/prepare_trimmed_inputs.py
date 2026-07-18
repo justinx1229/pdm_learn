@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from pdm_learn.oncogene import trim_oncogene_input_tables
-from pdm_learn.ppi import derive_shared_trimmed_inputs
+from pdm_learn.workflows.oncogene import trim_oncogene_input_tables
+from pdm_learn.workflows.ppi import derive_shared_trimmed_inputs
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

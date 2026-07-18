@@ -1,3 +1,5 @@
+"""Protein-protein interaction controls, features, and ranking helpers."""
+
 from __future__ import annotations
 
 import ast
@@ -12,6 +14,8 @@ from sklearn.metrics import roc_auc_score
 from tqdm.auto import tqdm
 
 from pdm_learn.modeling import _build_predictor, _predict_scores
+from pdm_learn.pair_features import PairFeatureConfig, build_pair_features
+from pdm_learn.presets import depmap_ppi
 from pdm_learn.preprocessing import build_density_map, density_centers
 
 
@@ -230,6 +234,12 @@ def build_ppi_feature_table(
     progress: bool = False,
     progress_desc: str = "PPI PDM feature blocks",
 ) -> pd.DataFrame:
+    """Build the DepMap PPI recipe through the generic pair-feature API.
+
+    ``PairFeatureConfig`` owns the pair-table mechanics; this wrapper keeps
+    the historical PPI universe and column defaults available to existing
+    callers.
+    """
     genes = set(ppi_gene_universe(datasets))
     pairs = pair_table.copy()
     pairs[gene1_column] = pairs[gene1_column].astype(str).str.strip()
@@ -240,16 +250,21 @@ def build_ppi_feature_table(
     if pairs.empty:
         raise ValueError("No PPI pairs remain after filtering to the shared DepMap gene universe.")
 
-    ordered, density_points, continuous = ppi_density_parameters(datasets)
-    features = build_density_map(
-        ordered,
-        pairs[[gene1_column, gene2_column]].to_numpy().tolist(),
-        density_points,
-        continuous,
+    return build_pair_features(
+        datasets,
+        pairs,
+        left_id_column=gene1_column,
+        right_id_column=gene2_column,
+        dataset_specs=depmap_ppi.make_dataset_specs(),
+        pairs=depmap_ppi.make_feature_pairs(),
+        methods=("pdm",),
+        config=PairFeatureConfig(
+            density_bins=int(depmap_ppi.defaults["density_bins"]),
+            log_offset=depmap_ppi.defaults["log_offset"],
+            drop_missing=bool(depmap_ppi.defaults["drop_missing"]),
+        ),
         progress=progress,
-        progress_desc=progress_desc,
-    )
-    return pd.concat([pairs.reset_index(drop=True), features.drop(columns=["pair"])], axis=1)
+    )["pdm"]
 
 
 def load_cancer_complexes(path: str | Path) -> pd.DataFrame:

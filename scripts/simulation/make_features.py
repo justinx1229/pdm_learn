@@ -9,7 +9,7 @@ from scipy.stats import pearsonr, spearmanr
 from sympy import Integer, Symbol, pi, sin
 from sklearn.feature_selection import mutual_info_regression
 
-from pdm_learn.oncogene import bicor
+from pdm_learn.features import bicor
 from pdm_learn.preprocessing import densitymap
 from pdm_learn.simulation import build_heatmap_dataset, build_metric_dataset, collect_simulated_pairs, partition
 

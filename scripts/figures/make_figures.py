@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from pdm_learn.oncogene import ONCOGENE_HEATMAP_DIMENSIONS, ONCOGENE_PAIRS
+from pdm_learn.workflows.oncogene import ONCOGENE_HEATMAP_DIMENSIONS, ONCOGENE_PAIRS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

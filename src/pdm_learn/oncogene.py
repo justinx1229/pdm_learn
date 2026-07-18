@@ -1,3 +1,5 @@
+"""DepMap oncogene input handling, feature generation, and ranking helpers."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -8,13 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy import stats
-from sklearn.feature_selection import mutual_info_regression
-from sklearn.metrics import mutual_info_score
 from tqdm.auto import tqdm
 
 from pdm_learn.modeling import KFold_PR, LOOCV
-from pdm_learn.preprocessing import densitymap, drop_nan
 
 
 COPY_NUMBER_LEVELS = np.array([0, 1, 2, 3, 4, 6, 8], dtype=float)
@@ -654,28 +652,15 @@ def compute_mutual_information(
     y_discrete: bool = False,
     random_state: int = 0,
 ) -> float:
-    x_array = np.asarray(x, dtype=float)
-    y_array = np.asarray(y, dtype=float)
-    mask = np.isfinite(x_array) & np.isfinite(y_array)
-    x_array = x_array[mask]
-    y_array = y_array[mask]
+    """Compatibility alias for :func:`pdm_learn.features.compute_mutual_information`."""
+    from pdm_learn.features import compute_mutual_information as _compute_mutual_information
 
-    if len(x_array) < 3:
-        return float("nan")
-
-    if x_discrete and y_discrete:
-        return float(mutual_info_score(np.rint(x_array).astype(int), np.rint(y_array).astype(int)))
-    if x_discrete:
-        return float(mutual_info_score(np.rint(x_array).astype(int), _bin_continuous(y_array)))
-    if y_discrete:
-        return float(mutual_info_score(_bin_continuous(x_array), np.rint(y_array).astype(int)))
-    return float(
-        mutual_info_regression(
-            x_array.reshape(-1, 1),
-            y_array,
-            discrete_features=False,
-            random_state=random_state,
-        )[0]
+    return _compute_mutual_information(
+        x,
+        y,
+        x_discrete=x_discrete,
+        y_discrete=y_discrete,
+        random_state=random_state,
     )
 
 
@@ -685,35 +670,10 @@ def bicor(
     c: float = 9.0,
     epsilon: float = 1e-9,
 ) -> float:
-    x_array = np.asarray(x, dtype=float)
-    y_array = np.asarray(y, dtype=float)
-    mask = np.isfinite(x_array) & np.isfinite(y_array)
-    x_array = x_array[mask]
-    y_array = y_array[mask]
+    """Compatibility alias for :func:`pdm_learn.features.bicor`."""
+    from pdm_learn.features import bicor as _bicor
 
-    if len(x_array) < 3:
-        return float("nan")
-
-    x_med = np.median(x_array)
-    y_med = np.median(y_array)
-    x_mad = np.median(np.abs(x_array - x_med))
-    y_mad = np.median(np.abs(y_array - y_med))
-    x_mad = max(float(x_mad), epsilon)
-    y_mad = max(float(y_mad), epsilon)
-
-    ux = (x_array - x_med) / (c * x_mad)
-    uy = (y_array - y_med) / (c * y_mad)
-    wx = (1 - ux**2) ** 2
-    wy = (1 - uy**2) ** 2
-    wx[np.abs(ux) >= 1] = 0
-    wy[np.abs(uy) >= 1] = 0
-
-    x_weighted = (x_array - x_med) * wx
-    y_weighted = (y_array - y_med) * wy
-    numerator = np.sum(x_weighted * y_weighted)
-    denominator = np.sqrt(np.sum(x_weighted**2) * np.sum(y_weighted**2))
-    denominator = max(float(denominator), epsilon)
-    return float(numerator / denominator)
+    return _bicor(x, y, c=c, epsilon=epsilon)
 
 
 def build_oncogene_density_features(
@@ -729,97 +689,41 @@ def build_oncogene_density_features(
     drop_missing: bool = True,
     progress: bool = False,
 ) -> pd.DataFrame:
-    specs = _normalize_dataset_specs(datasets, dataset_specs)
-    if "copy_num" in specs and specs["copy_num"].levels == tuple(COPY_NUMBER_LEVELS):
-        specs["copy_num"] = OncogeneDatasetSpec("copy_num", "discrete", tuple(copy_number_levels), normalize=False)
-    pair_specs = _normalize_pair_specs(datasets, pairs)
-    pair_dataset_names = sorted({name for pair in pair_specs for name in (pair.left, pair.right)})
-    genes = oncogene_gene_list(datasets, dataset_names=pair_dataset_names, mode=gene_universe)
-    dataset = pd.DataFrame({gene_column_name: genes})
-    gene_index = {gene: index for index, gene in enumerate(genes)}
+    """Deprecated compatibility wrapper for :func:`pdm_learn.features.build_density_features`.
 
-    pair_iterator = tqdm(pair_specs, desc="Gene PDM feature blocks", disable=not progress)
-    for pair in pair_iterator:
-        left_name = pair.left
-        right_name = pair.right
-        pair_label = f"{left_name} vs {right_name}"
-        pair_iterator.set_postfix_str(pair_label)
+    DepMap defaults remain here so existing callers keep their historical
+    assay configuration, while the numerical implementation now lives in the
+    domain-neutral feature module.
+    """
+    from pdm_learn.features import build_density_features
 
-        left_spec = specs[left_name]
-        right_spec = specs[right_name]
-        left_df, right_df = _prepare_pair_dataframes(
-            datasets[left_name],
-            datasets[right_name],
-            left_spec,
-            right_spec,
-        )
-
-        left_levels = None if left_spec.is_continuous else _spec_levels(left_df, left_spec)
-        right_levels = None if right_spec.is_continuous else _spec_levels(right_df, right_spec)
-        left_width = boxes if left_spec.is_continuous else len(left_levels)
-        right_width = boxes if right_spec.is_continuous else len(right_levels)
-        column_count = left_width * right_width
-
-        columns = [f"{left_name}.{right_name}.{i}" for i in range(column_count)]
-        temp = pd.DataFrame(np.nan, index=range(len(genes)), columns=columns)
-
-        left_rows = _row_lookup(left_df)
-        right_rows = _row_lookup(right_df)
-        left_std = _safe_std(left_df)
-        right_std = _safe_std(right_df)
-        sigma = _pair_sigma(left_df, right_df, left_spec, right_spec)
-
-        common_genes = [gene for gene in left_df.iloc[:, 0].astype(str).str.strip() if gene in right_rows]
-        for gene_name in tqdm(common_genes, desc=pair_label, disable=not progress, leave=False):
-            if gene_name not in gene_index:
-                continue
-            if left_spec.is_continuous:
-                x, x_centers = _extract_density_values(
-                    left_rows[gene_name],
-                    cutoff=True,
-                    std=left_std,
-                    max_value=boxes,
-                    boxes=boxes,
-                )
-            else:
-                x = _extract_density_values(left_rows[gene_name], cutoff=False)
-                x_centers = left_levels
-
-            if right_spec.is_continuous:
-                y, y_centers = _extract_density_values(
-                    right_rows[gene_name],
-                    cutoff=True,
-                    std=right_std,
-                    max_value=boxes,
-                    boxes=boxes,
-                )
-            else:
-                y = _extract_density_values(right_rows[gene_name], cutoff=False)
-                y_centers = right_levels
-
-            x, y = drop_nan(x, y)
-            if len(x) == 0:
-                continue
-            matrix = densitymap(
-                x,
-                y,
-                x_centers,
-                y_centers,
-                xdiscrete=left_spec.is_discrete,
-                ydiscrete=right_spec.is_discrete,
-                sigma=sigma,
-            )
-            if isinstance(matrix, str):
-                continue
-            temp.iloc[gene_index[gene_name]] = matrix.flatten()
-
-        offset = log_offset if log_offset is not None else 1 / max(len(left_df.columns), 1)
-        temp = temp.astype(float) + offset
-        dataset = pd.concat([dataset, temp.map(np.log)], axis=1)
-
-    if drop_missing:
-        dataset = dataset.dropna()
-    return dataset.reset_index(drop=True)
+    resolved_specs: dict[str, object] = {
+        name: spec
+        for name, spec in DEFAULT_ONCOGENE_DATASET_SPECS.items()
+        if name in datasets
+    }
+    if dataset_specs is not None:
+        resolved_specs.update(dataset_specs)
+    elif "copy_num" in resolved_specs:
+        resolved_specs["copy_num"] = {
+            "kind": "discrete",
+            "levels": tuple(copy_number_levels),
+            "normalize": None,
+        }
+    resolved_pairs = pairs
+    if resolved_pairs is None and all(name in datasets for name in DEFAULT_ONCOGENE_DATASET_SPECS):
+        resolved_pairs = DEFAULT_ONCOGENE_PAIR_SPECS
+    return build_density_features(
+        datasets,
+        specs=resolved_specs,
+        pairs=resolved_pairs,
+        density_bins=boxes,
+        log_offset=log_offset,
+        drop_missing=drop_missing,
+        entity_universe=gene_universe,
+        output_id_column=gene_column_name,
+        progress=progress,
+    )
 
 
 def build_oncogene_correlation_features(
@@ -842,72 +746,30 @@ def build_oncogene_statistic_features(
     gene_column_name: str = "gene name",
     progress: bool = False,
 ) -> pd.DataFrame:
-    if method not in {"pearson", "spearman", "mi", "bicor"}:
-        raise ValueError("method must be 'pearson', 'spearman', 'mi', or 'bicor'")
+    """Deprecated compatibility wrapper for the generic statistic builder."""
+    from pdm_learn.features import build_statistic_features
 
-    specs = _normalize_dataset_specs(datasets, dataset_specs)
-    pair_specs = _normalize_pair_specs(datasets, pairs)
-    pair_dataset_names = sorted({name for pair in pair_specs for name in (pair.left, pair.right)})
-    genes = oncogene_gene_list(datasets, dataset_names=pair_dataset_names, mode=gene_universe)
-    dataset = pd.DataFrame({gene_column_name: genes})
-    gene_index = {gene: index for index, gene in enumerate(genes)}
-
-    pair_iterator = tqdm(
-        pair_specs,
-        desc=f"Gene {method} feature blocks",
-        disable=not progress,
+    resolved_specs: dict[str, object] = {
+        name: spec
+        for name, spec in DEFAULT_ONCOGENE_DATASET_SPECS.items()
+        if name in datasets
+    }
+    if dataset_specs is not None:
+        resolved_specs.update(dataset_specs)
+    resolved_pairs = pairs
+    if resolved_pairs is None and all(name in datasets for name in DEFAULT_ONCOGENE_DATASET_SPECS):
+        resolved_pairs = DEFAULT_ONCOGENE_PAIR_SPECS
+    return build_statistic_features(
+        datasets,
+        method=method,
+        specs=resolved_specs,
+        pairs=resolved_pairs,
+        # Historical statistic tables retained rows with unavailable values.
+        drop_missing=False,
+        entity_universe=gene_universe,
+        output_id_column=gene_column_name,
+        progress=progress,
     )
-    for pair in pair_iterator:
-        left_name = pair.left
-        right_name = pair.right
-        pair_label = f"{left_name} vs {right_name}"
-        pair_iterator.set_postfix_str(pair_label)
-        temp = pd.DataFrame(np.nan, index=range(len(genes)), columns=[f"{left_name}.{right_name}"])
-
-        left_spec = specs[left_name]
-        right_spec = specs[right_name]
-        left_df, right_df = _prepare_pair_dataframes(
-            datasets[left_name],
-            datasets[right_name],
-            left_spec,
-            right_spec,
-        )
-
-        left_rows = _row_lookup(left_df)
-        right_rows = _row_lookup(right_df)
-        x_discrete = left_spec.is_discrete
-        y_discrete = right_spec.is_discrete
-
-        common_genes = [gene for gene in left_df.iloc[:, 0].astype(str).str.strip() if gene in right_rows]
-        for gene_name in tqdm(common_genes, desc=pair_label, disable=not progress, leave=False):
-            if gene_name not in gene_index:
-                continue
-            x = left_rows[gene_name]
-            y = right_rows[gene_name]
-            x, y = drop_nan(x, y)
-            if len(x) == 0:
-                continue
-            if method == "pearson":
-                if np.nanstd(x) == 0 or np.nanstd(y) == 0:
-                    continue
-                value = stats.pearsonr(x, y).statistic
-            elif method == "spearman":
-                if np.nanstd(x) == 0 or np.nanstd(y) == 0:
-                    continue
-                value = stats.spearmanr(x, y).statistic
-            elif method == "mi":
-                value = compute_mutual_information(
-                    x,
-                    y,
-                    x_discrete=x_discrete,
-                    y_discrete=y_discrete,
-                )
-            else:
-                value = bicor(x, y)
-            temp.iloc[gene_index[gene_name], 0] = value
-        dataset = pd.concat([dataset, temp], axis=1)
-
-    return dataset.reset_index(drop=True)
 
 
 def save_oncogene_feature_tables(

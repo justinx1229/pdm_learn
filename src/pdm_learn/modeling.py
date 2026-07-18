@@ -1,6 +1,8 @@
+"""Model fitting, rank recovery, and evaluation helpers."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -163,7 +165,7 @@ def _select_features_with_ks_test(
         features_left = max(1, min(features_left, positive.shape[1]))
 
         p_val = []
-        for j in range(0, len(positive[0]) - 1):
+        for j in range(len(positive[0])):
             _, p_value = stats.kstest(positive[:, j], negative[:, j])
             p_val.append(p_value)
     except Exception:
@@ -727,3 +729,160 @@ def importance_test(
             np.random.shuffle(neg)
 
     return out
+
+
+def _numeric_feature_values(dataframe: pd.DataFrame, id_column: str | None = None) -> np.ndarray:
+    """Return the numeric feature portion of a labeled feature table.
+
+    ``rank_candidates`` and ``evaluate_labeled_features`` intentionally accept
+    a normal feature DataFrame rather than a package-specific container.  The
+    identifier defaults to the first column, matching the feature builders.
+    """
+    if dataframe.shape[1] < 2:
+        raise ValueError("A feature table must contain an identifier and at least one feature column.")
+
+    resolved_id = id_column or str(dataframe.columns[0])
+    if resolved_id not in dataframe.columns:
+        raise ValueError(f"Identifier column {resolved_id!r} was not found.")
+    numeric = dataframe.drop(columns=resolved_id).apply(pd.to_numeric, errors="coerce")
+    if numeric.shape[1] == 0:
+        raise ValueError("A feature table must contain at least one numeric feature column.")
+    values = numeric.to_numpy(dtype=float)
+    if not np.isfinite(values).all():
+        raise ValueError("Feature tables passed to modeling must not contain missing or non-numeric values.")
+    return values
+
+
+def rank_candidates(
+    feature_table: pd.DataFrame,
+    positive_labels: Iterable[object],
+    *,
+    id_column: str | None = None,
+    trials: int = 100,
+    model: str = "GBR",
+    ks_test: bool = True,
+    features_left: int | None = None,
+    progress: bool = False,
+) -> pd.DataFrame:
+    """Rank unlabeled rows using known positive labels.
+
+    Parameters
+    ----------
+    feature_table:
+        A table with one identifier column and numeric feature columns.
+    positive_labels:
+        Entity identifiers considered positive.  All other rows are candidates.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Candidate identifiers and descending model scores.
+    """
+    from .labels import split_labeled_rows
+
+    positive, candidates = split_labeled_rows(
+        feature_table,
+        positive_labels,
+        id_column=id_column,
+        drop_missing=True,
+    )
+    if positive.empty or candidates.empty:
+        raise ValueError("Ranking requires at least one labeled positive and one unlabeled candidate.")
+
+    resolved_id = id_column or str(feature_table.columns[0])
+    scores = core_predict(
+        _numeric_feature_values(positive, resolved_id),
+        _numeric_feature_values(candidates, resolved_id),
+        trials,
+        model=model,
+        ks_test=ks_test,
+        features_left=features_left,
+        progress=progress,
+        progress_desc="Candidate ranking trials",
+    )
+    if isinstance(scores, str):
+        raise ValueError(scores)
+    return (
+        pd.DataFrame({resolved_id: candidates[resolved_id].to_numpy(), "score": scores})
+        .sort_values("score", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def rank_unlabeled(
+    feature_table: pd.DataFrame,
+    positive_labels: Iterable[object],
+    **kwargs: object,
+) -> pd.DataFrame:
+    """Compatibility-friendly name for :func:`rank_candidates`.
+
+    ``unlabeled`` is more precise than ``negative`` for the common setting
+    where every row outside the known-positive set is a candidate rather than
+    a confirmed negative example.
+    """
+    return rank_candidates(feature_table, positive_labels, **kwargs)
+
+
+def evaluate_labeled_features(
+    feature_tables: Mapping[str, pd.DataFrame] | pd.DataFrame,
+    positive_labels: Iterable[object],
+    *,
+    id_column: str | None = None,
+    model: str = "GBR",
+    trials: int = 25,
+    ks_test: bool = False,
+    features_left: int | None = None,
+    n_splits: int = 5,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """Evaluate one or more feature tables against a positive-label set.
+
+    The returned table contains ROC AUC and average precision where the class
+    counts support stratified cross-validation.  This is deliberately a small
+    table-oriented API; plotting remains available through the lower-level
+    legacy helpers in this module.
+    """
+    from .labels import split_labeled_rows
+
+    tables = {"features": feature_tables} if isinstance(feature_tables, pd.DataFrame) else feature_tables
+    rows: list[dict[str, object]] = []
+    for name, table in tables.items():
+        positive, negative = split_labeled_rows(
+            table,
+            positive_labels,
+            id_column=id_column,
+            drop_missing=True,
+        )
+        resolved_id = id_column or str(table.columns[0])
+        row = {
+            "method": str(name),
+            "positive_rows": len(positive),
+            "negative_rows": len(negative),
+            "roc_auc": np.nan,
+            "average_precision": np.nan,
+        }
+        folds = min(n_splits, len(positive), len(negative))
+        if folds >= 2:
+            positive_values = _numeric_feature_values(positive, resolved_id)
+            negative_values = _numeric_feature_values(negative, resolved_id)
+            row["roc_auc"] = KFold_ROC_AUC(
+                positive_values,
+                negative_values,
+                model=model,
+                ks_test=ks_test,
+                features_left=features_left,
+                n_splits=folds,
+                random_state=random_state,
+            )
+            row["average_precision"] = KFold_PR(
+                positive_values,
+                negative_values,
+                trials,
+                model=model,
+                ks_test=ks_test,
+                features_left=features_left,
+                n_splits=folds,
+                random_state=random_state,
+            )[0]
+        rows.append(row)
+    return pd.DataFrame(rows)

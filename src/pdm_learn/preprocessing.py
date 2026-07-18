@@ -1,3 +1,5 @@
+"""Low-level matrix preparation and pairwise density-map construction."""
+
 from __future__ import annotations
 
 import math

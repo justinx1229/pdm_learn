@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pdm_learn.ppi import build_ppi_feature_table, load_biogrid_pairs, load_ppi_inputs
+from pdm_learn.workflows.ppi import build_features, load_biogrid_pairs, load_inputs
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -45,11 +45,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading shared DepMap input tables...")
-    datasets = load_ppi_inputs(args.data_dir, input_paths=input_overrides(args))
+    datasets = load_inputs(args.data_dir, input_paths=input_overrides(args))
     print(f"Loading BioGRID pairs from {args.biogrid}...")
     pairs = load_biogrid_pairs(args.biogrid)
     print(f"Building PPI PDM features for {len(pairs)} BioGRID pairs...")
-    features = build_ppi_feature_table(datasets, pairs, progress=True)
+    features = build_features(datasets, pairs, progress=True)["pdm"]
     output_path = output_dir / args.output_name
     features.to_csv(output_path, index=False)
     print(f"PPI feature table: {output_path}")

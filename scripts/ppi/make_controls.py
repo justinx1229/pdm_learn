@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pdm_learn.ppi import build_control_feature_tables, load_cancer_complexes, load_ppi_inputs
+from pdm_learn.workflows.ppi import build_control_feature_tables, load_cancer_complexes, load_inputs
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -52,7 +52,7 @@ def main() -> None:
     control_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading shared DepMap input tables...")
-    datasets = load_ppi_inputs(args.data_dir, input_paths=input_overrides(args))
+    datasets = load_inputs(args.data_dir, input_paths=input_overrides(args))
     print(f"Loading cancer-complex workbook from {args.complexes}...")
     complexes = load_cancer_complexes(args.complexes)
     print(
