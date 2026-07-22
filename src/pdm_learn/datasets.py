@@ -23,7 +23,6 @@ from typing import Literal, TypeAlias
 
 import pandas as pd
 
-
 DatasetKind: TypeAlias = Literal["continuous", "discrete", "binary"]
 """Supported value types for a matrix."""
 
@@ -57,15 +56,12 @@ class DatasetSpec:
         Header of the entity identifier column.  If omitted, the first input
         column is used.  The header is preserved in prepared output.
 
-    ``True`` and ``False`` are accepted as compatibility spellings for
-    ``"row_center"`` and ``None`` respectively; new code should use the
-    explicit values above.
     """
 
     name: str
     kind: DatasetKind = "continuous"
     levels: tuple[float, ...] | None = None
-    normalize: Normalization | bool = "row_center"
+    normalize: Normalization = "row_center"
     id_column: str | None = None
 
     def __post_init__(self) -> None:
@@ -94,9 +90,7 @@ class DatasetSpec:
             object.__setattr__(self, "levels", levels)
 
         normalization: Normalization
-        if self.normalize is True:
-            normalization = "row_center"
-        elif self.normalize is False or self.normalize is None:
+        if self.normalize is None:
             normalization = None
         elif self.normalize == "row_center":
             normalization = "row_center"
@@ -170,7 +164,9 @@ def matrix_id_column(dataframe: pd.DataFrame, spec: DatasetSpec | None = None) -
         ) from error
 
 
-def matrix_sample_columns(dataframe: pd.DataFrame, spec: DatasetSpec | None = None) -> tuple[Hashable, ...]:
+def matrix_sample_columns(
+    dataframe: pd.DataFrame, spec: DatasetSpec | None = None
+) -> tuple[Hashable, ...]:
     """Return all non-identifier column headers in their input order."""
     id_column = matrix_id_column(dataframe, spec)
     return tuple(column for column in dataframe.columns if column != id_column)
@@ -204,7 +200,8 @@ def prepare_matrix(dataframe: pd.DataFrame, spec: DatasetSpec) -> pd.DataFrame:
     if identifiers.duplicated().any():
         examples = identifiers.loc[identifiers.duplicated(keep=False)].unique()[:5].tolist()
         raise ValueError(
-            f"Dataset {spec.name!r} contains duplicate entity identifiers after trimming: {examples!r}."
+            f"Dataset {spec.name!r} contains duplicate entity identifiers "
+            f"after trimming: {examples!r}."
         )
 
     numeric = output.loc[:, sample_columns].apply(pd.to_numeric, errors="coerce")
@@ -223,7 +220,9 @@ def _clean_dataset_name(value: object) -> str:
     return name
 
 
-def resolve_dataset_specs(names: Iterable[object], specs: DatasetSpecs = None) -> dict[str, DatasetSpec]:
+def resolve_dataset_specs(
+    names: Iterable[object], specs: DatasetSpecs = None
+) -> dict[str, DatasetSpec]:
     """Return one :class:`DatasetSpec` for each named input matrix.
 
     ``specs`` may be a mapping keyed by dataset name or an iterable of specs.
@@ -261,7 +260,9 @@ def resolve_dataset_specs(names: Iterable[object], specs: DatasetSpecs = None) -
 
     unknown = sorted(set(supplied) - set(clean_names))
     if unknown:
-        raise ValueError(f"Specifications were provided for unknown datasets: {', '.join(unknown)}.")
+        raise ValueError(
+            f"Specifications were provided for unknown datasets: {', '.join(unknown)}."
+        )
     return {name: supplied.get(name, DatasetSpec(name)) for name in clean_names}
 
 

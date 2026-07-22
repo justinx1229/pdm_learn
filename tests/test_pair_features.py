@@ -1,11 +1,10 @@
-from dataclasses import dataclass
-from pathlib import Path
 import sys
 import unittest
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -60,7 +59,13 @@ class PairFeatureTests(unittest.TestCase):
         }
         self.specs = [
             DatasetSpec("response", id_column="compound id", normalize=None),
-            DatasetSpec("state", kind="discrete", levels=(0.0, 1.0), normalize=None, id_column="protein code"),
+            DatasetSpec(
+                "state",
+                kind="discrete",
+                levels=(0.0, 1.0),
+                normalize=None,
+                id_column="protein code",
+            ),
             DatasetSpec("membership", kind="binary", normalize=None, id_column="member id"),
         ]
         self.pairs = pd.DataFrame(
@@ -103,7 +108,7 @@ class PairFeatureTests(unittest.TestCase):
             self.pairs,
             left_id_column="source drug",
             right_id_column="target protein",
-            dataset_specs=self.specs,
+            specs=self.specs,
             config=PairFeatureConfig(
                 pairs=[("response", "state")],
                 density_bins=2,
@@ -113,12 +118,19 @@ class PairFeatureTests(unittest.TestCase):
 
         self.assertEqual(features.index.tolist(), [10, 20])
         self.assertTrue(pd.isna(features.loc[20, "optional metadata"]))
-        self.assertEqual(len([column for column in features if column.startswith("response.state.")]), 4)
+        self.assertEqual(
+            len([column for column in features if column.startswith("response.state.")]), 4
+        )
 
     def test_reports_pair_matrices_without_shared_samples(self) -> None:
         no_overlap = dict(self.datasets)
         no_overlap["state"] = self.datasets["state"].rename(
-            columns={" sample 1 ": "other 1", "sample 2": "other 2", "sample 3": "other 3", "sample 4": "other 4"}
+            columns={
+                " sample 1 ": "other 1",
+                "sample 2": "other 2",
+                "sample 3": "other 3",
+                "sample 4": "other 4",
+            }
         )
 
         with self.assertRaisesRegex(ValueError, "do not share any sample columns"):
@@ -127,7 +139,7 @@ class PairFeatureTests(unittest.TestCase):
                 self.pairs,
                 left_id_column="source drug",
                 right_id_column="target protein",
-                dataset_specs=self.specs,
+                specs=self.specs,
                 pairs=[("response", "state")],
             )
 

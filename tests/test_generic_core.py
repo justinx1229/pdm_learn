@@ -1,12 +1,11 @@
 """Regression coverage for the documented, domain-neutral public API."""
 
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -57,7 +56,13 @@ class GenericCoreTests(unittest.TestCase):
             datasets,
             specs=[
                 DatasetSpec("score", id_column="record"),
-                DatasetSpec("state", kind="discrete", levels=(-2.5, 0.0, 3.5), normalize=None, id_column="state id"),
+                DatasetSpec(
+                    "state",
+                    kind="discrete",
+                    levels=(-2.5, 0.0, 3.5),
+                    normalize=None,
+                    id_column="state id",
+                ),
                 DatasetSpec("event", kind="binary", normalize=None, id_column="event id"),
             ],
             methods=("pdm", "pearson", "spearman", "mi", "bicor"),
@@ -114,9 +119,9 @@ class GenericCoreTests(unittest.TestCase):
         )
         labels = {"A", "B", "C"}
 
-        ranking = rank_candidates(table, labels, trials=2, model="LR")
-        alias_ranking = rank_unlabeled(table, labels, trials=2, model="LR")
-        evaluation = evaluate_labeled_features(table, labels, model="LR", trials=2, n_splits=3)
+        ranking = rank_candidates(table, labels, trials=2)
+        alias_ranking = rank_unlabeled(table, labels, trials=2)
+        evaluation = evaluate_labeled_features(table, labels, n_splits=3)
 
         self.assertEqual(set(ranking["entity"]), {"D", "E", "F"})
         self.assertEqual(set(alias_ranking["entity"]), {"D", "E", "F"})

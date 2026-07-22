@@ -1,46 +1,101 @@
-"""The maintained DepMap protein-interaction recipe.
+"""Optional DepMap recipe for ordered protein-pair feature construction.
 
-This module contains the small amount of PPI-specific policy that belongs
-outside the reusable library: the five DepMap assays, their default input
-paths, and the conventional ``Gene1``/``Gene2`` pair columns.  Feature
-construction itself is delegated to :mod:`pdm_learn.pair_features`.
+The recipe contains only the conventional DepMap defaults. Pair-table feature
+construction is provided by :mod:`pdm_learn.pair_features` and works for any
+two entity types.
 """
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping, Sequence
-from importlib import import_module
+from itertools import combinations
 from pathlib import Path
-from typing import Any
 
+import pandas as pd
+
+from ..datasets import load_matrices
 from ..pair_features import PairFeatureConfig, build_pair_features
 from ..presets import DepMapPreset, depmap_ppi
 
-
 PRESET = depmap_ppi
-"""Default dataset, pair, and parameter configuration for the PPI recipe."""
+"""Default configuration for the DepMap protein-pair recipe."""
 
-_LEGACY_EXPORTS = frozenset(
-    {
-        "canonical_pair",
-        "build_control_feature_tables",
-        "cancer_complex_pair_set",
-        "derive_shared_trimmed_inputs",
-        "evaluate_ppi_controls",
-        "load_biogrid_pairs",
-        "load_cancer_complexes",
-        "load_ppi_inputs",
-        "parse_gene_list",
-        "rank_ppi_pairs_cancer",
-        "sample_negative_control_pairs",
-        "sample_positive_control_pairs",
-    }
-)
+GENES_COLUMN = "Representative Genes (Core Members)"
+COMPLEX_NAME_COLUMN = "Complex Name"
 
 
-def _legacy_module() -> Any:
-    """Load the compatibility implementation only for a legacy attribute."""
-    return import_module("pdm_learn.ppi")
+def canonical_pair(gene_a: object, gene_b: object) -> str:
+    """Return an order-independent identifier for a gene pair."""
+    left, right = sorted((str(gene_a).strip(), str(gene_b).strip()))
+    return f"{left}.{right}"
+
+
+def parse_gene_list(value: object) -> list[str]:
+    """Parse the cancer-complex workbook's list-like gene column."""
+    if isinstance(value, str):
+        try:
+            value = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            value = value.split(",")
+    if not isinstance(value, (list, tuple, set)):
+        value = [value]
+    return [str(gene).strip() for gene in value if str(gene).strip()]
+
+
+def load_biogrid_pairs(path: str | Path) -> pd.DataFrame:
+    """Load a BioGRID pair table and add stable pair identifiers.
+
+    The input may name its two gene columns ``Gene_A``/``Gene_B`` or
+    ``Gene1``/``Gene2``.  The original orientation is retained for feature
+    construction; ``canonical_pair`` is the order-independent label key.
+    """
+    pairs = pd.read_csv(path).rename(columns={"Gene_A": "Gene1", "Gene_B": "Gene2"})
+    if not {"Gene1", "Gene2"}.issubset(pairs.columns):
+        raise ValueError("BioGRID input must contain Gene_A/Gene_B or Gene1/Gene2 columns.")
+    pairs = pairs.dropna(subset=["Gene1", "Gene2"]).copy()
+    pairs["Gene1"] = pairs["Gene1"].astype("string").str.strip()
+    pairs["Gene2"] = pairs["Gene2"].astype("string").str.strip()
+    pairs = pairs[pairs["Gene1"].ne("") & pairs["Gene2"].ne("")].reset_index(drop=True)
+    gene_pairs = zip(pairs["Gene1"], pairs["Gene2"], strict=True)
+    pairs["pair"] = [f"{left}.{right}" for left, right in gene_pairs]
+    pairs["canonical_pair"] = [
+        canonical_pair(left, right)
+        for left, right in zip(pairs["Gene1"], pairs["Gene2"], strict=True)
+    ]
+    return pairs
+
+
+def load_cancer_complexes(path: str | Path) -> pd.DataFrame:
+    """Load the curated cancer-complex table from CSV or Excel."""
+    source = Path(path)
+    if source.suffix.lower() in {".xls", ".xlsx"}:
+        complexes = pd.read_excel(source)
+    else:
+        complexes = pd.read_csv(source)
+    if "Unnamed: 0" in complexes.columns:
+        complexes = complexes.drop(columns="Unnamed: 0")
+    if GENES_COLUMN not in complexes.columns:
+        raise ValueError(f"Expected column {GENES_COLUMN!r} in cancer-complex table.")
+    if COMPLEX_NAME_COLUMN not in complexes.columns:
+        complexes = complexes.copy()
+        complexes[COMPLEX_NAME_COLUMN] = [f"Complex {index + 1}" for index in range(len(complexes))]
+    return complexes
+
+
+def cancer_complex_pair_set(
+    cancer_complexes: pd.DataFrame,
+    *,
+    genes_column: str = GENES_COLUMN,
+) -> set[str]:
+    """Return all order-independent gene pairs represented by curated complexes."""
+    if genes_column not in cancer_complexes.columns:
+        raise ValueError(f"Cancer-complex table does not contain {genes_column!r}.")
+    pairs: set[str] = set()
+    for genes in cancer_complexes[genes_column].map(parse_gene_list):
+        for gene_a, gene_b in combinations(dict.fromkeys(genes), 2):
+            pairs.add(canonical_pair(gene_a, gene_b))
+    return pairs
 
 
 def load_inputs(
@@ -48,71 +103,53 @@ def load_inputs(
     input_paths: Mapping[str, str | Path] | None = None,
     *,
     preset: DepMapPreset = PRESET,
-) -> dict[str, Any]:
-    """Load the shared-trimmed DepMap matrices used by the PPI recipe."""
-    from ..datasets import load_matrices
-
-    paths = preset.resolve_input_paths(data_dir, input_paths, names="dataset")
-    return load_matrices(paths, specs=preset.make_dataset_specs())
+) -> dict[str, pd.DataFrame]:
+    """Load the recipe's standardized DepMap matrices from ``data_dir``."""
+    return load_matrices(
+        preset.resolve_input_paths(data_dir, input_paths),
+        specs=preset.make_dataset_specs(),
+    )
 
 
 def build_features(
-    datasets: Mapping[str, Any],
-    pair_table: Any,
+    datasets: Mapping[str, pd.DataFrame],
+    pair_table: pd.DataFrame,
     *,
-    left_id_column: object = "Gene1",
-    right_id_column: object = "Gene2",
-    specs: Mapping[str, object] | Sequence[object] | None = None,
-    pairs: Sequence[object] | None = None,
+    left_id_column: str = "Gene1",
+    right_id_column: str = "Gene2",
     methods: Sequence[str] = ("pdm",),
-    density_bins: int | None = None,
-    log_offset: float | str | None = None,
-    drop_missing: bool | None = None,
+    config: PairFeatureConfig | None = None,
     progress: bool = False,
     preset: DepMapPreset = PRESET,
-) -> dict[str, Any]:
-    """Build features for a protein-pair table using generic pair builders."""
-    resolved_specs = specs if specs is not None else preset.make_dataset_specs()
-    resolved_pairs = pairs if pairs is not None else preset.make_feature_pairs()
-    config = PairFeatureConfig(
-        pairs=None,
-        density_bins=int(density_bins if density_bins is not None else preset.defaults["density_bins"]),
-        log_offset=preset.defaults.get("log_offset", "auto") if log_offset is None else log_offset,
-        drop_missing=bool(preset.defaults["drop_missing"] if drop_missing is None else drop_missing),
+) -> dict[str, pd.DataFrame]:
+    """Build the standard DepMap feature blocks for an ordered pair table."""
+    feature_config = config or PairFeatureConfig(
+        density_bins=int(preset.defaults["density_bins"]),
+        log_offset=preset.defaults["log_offset"],
+        drop_missing=bool(preset.defaults["drop_missing"]),
     )
     return build_pair_features(
         datasets,
         pair_table,
         left_id_column=left_id_column,
         right_id_column=right_id_column,
-        specs=resolved_specs,
-        pairs=resolved_pairs,
+        specs=preset.make_dataset_specs(),
+        pairs=preset.make_feature_pairs(),
         methods=methods,
-        config=config,
+        config=feature_config,
         progress=progress,
     )
 
 
-def rank_candidates(
-    feature_table: Any,
-    cancer_complexes: Any,
-    **kwargs: object,
-) -> Any:
-    """Rank candidate interactions using the established cancer-complex recipe."""
-    return _legacy_module().rank_ppi_pairs_cancer(feature_table, cancer_complexes, **kwargs)
-
-
-def __getattr__(name: str) -> Any:
-    """Expose selected historical helpers without importing them eagerly."""
-    if name in _LEGACY_EXPORTS:
-        value = getattr(_legacy_module(), name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | _LEGACY_EXPORTS)
-
-
-__all__ = ["PRESET", "build_features", "load_inputs", "rank_candidates", *_LEGACY_EXPORTS]
+__all__ = [
+    "COMPLEX_NAME_COLUMN",
+    "GENES_COLUMN",
+    "PRESET",
+    "build_features",
+    "cancer_complex_pair_set",
+    "canonical_pair",
+    "load_biogrid_pairs",
+    "load_cancer_complexes",
+    "load_inputs",
+    "parse_gene_list",
+]

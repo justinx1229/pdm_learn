@@ -1,10 +1,9 @@
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
-
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -31,9 +30,14 @@ class DatasetUtilitiesTests(unittest.TestCase):
         prepared = prepare_matrix(raw, DatasetSpec("measurements", id_column="record id"))
 
         self.assertEqual(prepared.columns.tolist(), ["record id", "sample_1", "sample_2"])
-        self.assertEqual(matrix_id_column(prepared, DatasetSpec("measurements", id_column="record id")), "record id")
+        self.assertEqual(
+            matrix_id_column(prepared, DatasetSpec("measurements", id_column="record id")),
+            "record id",
+        )
         self.assertEqual(prepared["record id"].tolist(), ["A", "B"])
-        self.assertEqual(prepared[["sample_1", "sample_2"]].values.tolist(), [[-1.0, 1.0], [-2.0, 2.0]])
+        self.assertEqual(
+            prepared[["sample_1", "sample_2"]].values.tolist(), [[-1.0, 1.0], [-2.0, 2.0]]
+        )
 
     def test_load_matrices_accepts_specs_for_arbitrary_identifier_columns(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -42,7 +46,11 @@ class DatasetUtilitiesTests(unittest.TestCase):
 
             matrices = load_matrices(
                 {" state ": path},
-                specs=[DatasetSpec("state", kind="binary", levels=(0, 1), normalize=None, id_column="entity")],
+                specs=[
+                    DatasetSpec(
+                        "state", kind="binary", levels=(0, 1), normalize=None, id_column="entity"
+                    )
+                ],
             )
 
         self.assertEqual(set(matrices), {"state"})

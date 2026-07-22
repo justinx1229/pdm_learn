@@ -17,7 +17,6 @@ import pandas as pd
 
 from .datasets import DatasetSpec, matrix_id_column
 
-
 LabelPaths: TypeAlias = str | Path | PathLike[str] | Iterable[str | Path | PathLike[str]] | None
 """Accepted one-file or many-file inputs for :func:`load_label_set`."""
 
@@ -50,11 +49,15 @@ def _label_column(dataframe: pd.DataFrame, column: int | str) -> pd.Series:
         try:
             return dataframe.iloc[:, column]
         except IndexError as error:
-            raise ValueError(f"Label column index {column} is outside the file's columns.") from error
+            raise ValueError(
+                f"Label column index {column} is outside the file's columns."
+            ) from error
     if column in dataframe.columns:
         return dataframe[column]
 
-    matches = [candidate for candidate in dataframe.columns if str(candidate).strip() == column.strip()]
+    matches = [
+        candidate for candidate in dataframe.columns if str(candidate).strip() == column.strip()
+    ]
     if len(matches) == 1:
         return dataframe[matches[0]]
     if len(matches) > 1:
@@ -167,13 +170,16 @@ def balance_labeled_rows(
         raise ValueError("n_per_class must be a positive integer or None.")
     if count > available:
         raise ValueError(
-            f"Cannot sample {count} rows per class; the smaller class contains only {available} rows."
+            f"Cannot sample {count} rows per class; the smaller class contains "
+            f"only {available} rows."
         )
 
     def sample(frame: pd.DataFrame) -> pd.DataFrame:
         if len(frame) == count:
             return frame.copy().reset_index(drop=True)
-        return frame.sample(n=count, replace=False, random_state=random_state).reset_index(drop=True)
+        return frame.sample(n=count, replace=False, random_state=random_state).reset_index(
+            drop=True
+        )
 
     return sample(positive), sample(negative)
 

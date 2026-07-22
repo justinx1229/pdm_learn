@@ -21,7 +21,7 @@ Example
 ...     pairs,
 ...     left_id_column="compound",
 ...     right_id_column="protein",
-...     dataset_specs=[
+...     specs=[
 ...         DatasetSpec("response", id_column="compound_id"),
 ...         DatasetSpec("state", kind="binary", normalize=None, id_column="protein_id"),
 ...     ],
@@ -47,9 +47,7 @@ from scipy import stats
 from tqdm.auto import tqdm
 
 from .datasets import DatasetSpec, prepare_matrix, resolve_dataset_specs
-from .features import bicor, compute_mutual_information
-from .preprocessing import densitymap
-
+from .features import bicor, compute_mutual_information, density_map
 
 STATISTIC_METHODS = ("pearson", "spearman", "mi", "bicor")
 """Scalar association methods accepted by :func:`build_pair_features`."""
@@ -90,7 +88,11 @@ class PairFeatureConfig:
     drop_missing: bool = True
 
     def __post_init__(self) -> None:
-        if isinstance(self.density_bins, bool) or not isinstance(self.density_bins, int) or self.density_bins < 1:
+        if (
+            isinstance(self.density_bins, bool)
+            or not isinstance(self.density_bins, int)
+            or self.density_bins < 1
+        ):
             raise ValueError("density_bins must be a positive integer.")
         if self.pairs is not None:
             if isinstance(self.pairs, (str, bytes)):
@@ -163,28 +165,21 @@ def _resolve_matrix_pairs(
     pairs: Sequence[object] | None,
 ) -> tuple[_MatrixPair, ...]:
     if pairs is None:
-        resolved = tuple(
-            _MatrixPair(left, right)
-            for left in datasets
-            for right in datasets
-        )
+        resolved = tuple(_MatrixPair(left, right) for left in datasets for right in datasets)
     else:
         resolved = tuple(_coerce_matrix_pair(pair) for pair in pairs)
 
     if not resolved:
         raise ValueError("Provide at least one matrix pair.")
     missing = sorted(
-        {
-            name
-            for pair in resolved
-            for name in (pair.left, pair.right)
-            if name not in datasets
-        }
+        {name for pair in resolved for name in (pair.left, pair.right) if name not in datasets}
     )
     if missing:
         raise ValueError(f"Matrix pairs reference missing datasets: {', '.join(missing)}.")
     if len(set(resolved)) != len(resolved):
-        raise ValueError("Matrix pairs must be unique; duplicate pairs would duplicate feature columns.")
+        raise ValueError(
+            "Matrix pairs must be unique; duplicate pairs would duplicate feature columns."
+        )
     return resolved
 
 
@@ -215,9 +210,13 @@ def _resolve_pair_column(dataframe: pd.DataFrame, requested: object, *, role: st
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        raise ValueError(f"Pair-table {role} ID column {requested!r} is ambiguous after trimming whitespace.")
+        raise ValueError(
+            f"Pair-table {role} ID column {requested!r} is ambiguous after trimming whitespace."
+        )
     available = ", ".join(repr(column) for column in dataframe.columns)
-    raise ValueError(f"Pair-table {role} ID column {requested!r} was not found. Available columns: {available}.")
+    raise ValueError(
+        f"Pair-table {role} ID column {requested!r} was not found. Available columns: {available}."
+    )
 
 
 def _clean_entity_id(value: object) -> str | None:
@@ -242,10 +241,7 @@ def _sample_lookup(dataframe: pd.DataFrame) -> dict[str, object]:
 def _row_lookup(dataframe: pd.DataFrame, sample_columns: Sequence[object]) -> dict[str, np.ndarray]:
     identifiers = dataframe.iloc[:, 0].astype("string").str.strip()
     values = dataframe.loc[:, sample_columns].to_numpy(dtype=float)
-    return {
-        str(identifier): values[index]
-        for index, identifier in enumerate(identifiers)
-    }
+    return {str(identifier): values[index] for index, identifier in enumerate(identifiers)}
 
 
 def _safe_std(rows: Mapping[str, np.ndarray]) -> float:
@@ -272,7 +268,7 @@ def _levels(rows: Mapping[str, np.ndarray], spec: DatasetSpec) -> np.ndarray | N
 def _snap_to_levels(values: np.ndarray, levels: np.ndarray, *, dataset_name: str) -> np.ndarray:
     """Snap close floating values to declared density centers.
 
-    ``densitymap`` uses exact dictionary lookup for discrete observations.
+    ``density_map`` requires discrete observations to match declared centers.
     Snapping permits harmless CSV floating-point noise while still rejecting a
     value that is not described by the dataset specification.
     """
@@ -288,7 +284,8 @@ def _snap_to_levels(values: np.ndarray, levels: np.ndarray, *, dataset_name: str
     if not matched.all():
         bad_values = np.unique(finite_values[~matched])[:5].tolist()
         raise ValueError(
-            f"Dataset {dataset_name!r} contains values outside its declared discrete levels: {bad_values!r}."
+            f"Dataset {dataset_name!r} contains values outside its declared "
+            f"discrete levels: {bad_values!r}."
         )
     output[finite] = levels[indices]
     return output
@@ -406,7 +403,7 @@ def _density_block(
 ) -> pd.DataFrame:
     columns = _density_columns(context, config.density_bins)
     values = np.full((len(left_ids), len(columns)), np.nan, dtype=float)
-    for row_index, (left_id, right_id) in enumerate(zip(left_ids, right_ids)):
+    for row_index, (left_id, right_id) in enumerate(zip(left_ids, right_ids, strict=True)):
         if left_id is None or right_id is None:
             continue
         x = context.left_rows.get(left_id)
@@ -430,17 +427,16 @@ def _density_block(
             scale=context.right_scale,
             bins=config.density_bins,
         )
-        matrix = densitymap(
+        matrix = density_map(
             x,
             y,
             x_centers,
             y_centers,
-            xdiscrete=x_discrete,
-            ydiscrete=y_discrete,
+            x_discrete=x_discrete,
+            y_discrete=y_discrete,
             sigma=context.sigma,
         )
-        if not isinstance(matrix, str):
-            values[row_index] = matrix.ravel()
+        values[row_index] = matrix.ravel()
 
     if config.log_offset is None or config.log_offset == "auto":
         offset = 1 / (context.sample_count + 1)
@@ -480,7 +476,7 @@ def _statistic_block(
     index: pd.Index,
 ) -> pd.DataFrame:
     values = np.full(len(left_ids), np.nan, dtype=float)
-    for row_index, (left_id, right_id) in enumerate(zip(left_ids, right_ids)):
+    for row_index, (left_id, right_id) in enumerate(zip(left_ids, right_ids, strict=True)):
         if left_id is None or right_id is None:
             continue
         x = context.left_rows.get(left_id)
@@ -530,7 +526,6 @@ def build_pair_features(
     *,
     left_id_column: object,
     right_id_column: object,
-    dataset_specs: Mapping[str, DatasetSpec] | Sequence[DatasetSpec] | None = None,
     specs: Mapping[str, DatasetSpec] | Sequence[DatasetSpec] | None = None,
     pairs: Sequence[object] | None = None,
     methods: Sequence[str] = ("pdm",),
@@ -551,12 +546,9 @@ def build_pair_features(
     left_id_column, right_id_column:
         Headers in ``pair_table`` identifying the left and right entities.
         Header matching ignores surrounding whitespace.
-    dataset_specs:
-        Optional mapping or sequence of ``DatasetSpec`` objects.  Unspecified
-        matrices default to continuous, row-centered preparation.
     specs:
-        Short alias for ``dataset_specs``, matching
-        :func:`pdm_learn.features.build_features`.  Pass only one spelling.
+        Optional mapping or sequence of ``DatasetSpec`` objects. Unspecified
+        matrices default to continuous, row-centered preparation.
     pairs:
         Ordered matrix pairs to build.  A pair maps the pair table's left ID
         to the pair's left matrix and its right ID to the right matrix.  This
@@ -589,21 +581,21 @@ def build_pair_features(
     if config is not None and not isinstance(config, PairFeatureConfig):
         raise TypeError("config must be a PairFeatureConfig.")
     config = config or PairFeatureConfig()
-    if dataset_specs is not None and specs is not None:
-        raise ValueError("Pass matrix specifications through either specs or dataset_specs, not both.")
     if pairs is not None and config.pairs is not None:
         raise ValueError("Pass matrix pairs through either pairs or config.pairs, not both.")
 
     normalized_datasets = _normalize_datasets(datasets)
     resolved_specs = resolve_dataset_specs(
         normalized_datasets,
-        dataset_specs if dataset_specs is not None else specs,
+        specs,
     )
     prepared = {
         name: prepare_matrix(dataframe, resolved_specs[name])
         for name, dataframe in normalized_datasets.items()
     }
-    resolved_pairs = _resolve_matrix_pairs(normalized_datasets, pairs if pairs is not None else config.pairs)
+    resolved_pairs = _resolve_matrix_pairs(
+        normalized_datasets, pairs if pairs is not None else config.pairs
+    )
     method_names = _validate_methods(methods)
 
     left_column = _resolve_pair_column(pair_table, left_id_column, role="left")

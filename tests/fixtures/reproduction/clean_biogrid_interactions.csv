@@ -1,0 +1,13 @@
+Gene_A,Gene_B,Interaction_Type,Confidence_Score
+A,B,physical,0.9
+A,C,physical,0.9
+B,C,physical,0.9
+D,E,physical,0.9
+D,F,physical,0.9
+E,F,physical,0.9
+A,G,physical,0.5
+B,H,physical,0.5
+C,I,physical,0.5
+D,J,physical,0.5
+G,H,physical,0.5
+I,J,physical,0.5

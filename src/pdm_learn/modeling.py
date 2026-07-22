@@ -1,756 +1,156 @@
-"""Model fitting, rank recovery, and evaluation helpers."""
+"""Ranking, cross-validation, and feature selection for feature tables."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from scipy import stats
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.inspection import permutation_importance
+from scipy.stats import ks_2samp
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score, roc_curve
+from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVR
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.svm import SVC
 from tqdm.auto import tqdm
 
-try:
-    import xgboost as xgb
-except ImportError:  # pragma: no cover
-    xgb = None
+MODEL_NAMES = ("logistic_regression", "random_forest", "gradient_boosting", "svm")
+"""Classifier names accepted by the public ranking and evaluation functions."""
 
 
-def _set_publication_theme() -> None:
-    sns.set_theme(
-        style="whitegrid",
-        context="paper",
-        font_scale=1.2,
-        rc={
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "axes.titleweight": "semibold",
-            "figure.dpi": 120,
-            "savefig.dpi": 300,
-            "grid.alpha": 0.2,
-            "grid.linestyle": "--",
-        },
+def _resolve_column(table: pd.DataFrame, requested: str | None) -> object:
+    if table.shape[1] < 2:
+        raise ValueError("A feature table needs an identifier and at least one feature column.")
+    if requested is None:
+        return table.columns[0]
+    if requested in table.columns:
+        return requested
+    matches = [column for column in table.columns if str(column).strip() == requested.strip()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"Identifier column {requested!r} is ambiguous after trimming whitespace.")
+    raise ValueError(f"Identifier column {requested!r} was not found.")
+
+
+def _normalize_labels(labels: Iterable[object]) -> set[str]:
+    normalized = {
+        str(value).strip()
+        for value in labels
+        if value is not None and not pd.isna(value) and str(value).strip()
+    }
+    if not normalized:
+        raise ValueError("Provide at least one positive label.")
+    return normalized
+
+
+def _numeric_features(
+    table: pd.DataFrame,
+    identifier: object,
+    feature_columns: Sequence[object] | None,
+) -> tuple[list[object], np.ndarray]:
+    if feature_columns is None:
+        candidates = [column for column in table.columns if column != identifier]
+    else:
+        candidates = list(feature_columns)
+        unknown = [column for column in candidates if column not in table.columns]
+        if unknown:
+            raise ValueError(f"Feature columns were not found: {unknown[:5]!r}.")
+        if identifier in candidates:
+            raise ValueError("The identifier column cannot also be a feature column.")
+    if not candidates:
+        raise ValueError("Provide at least one feature column.")
+
+    converted = table.loc[:, candidates].apply(pd.to_numeric, errors="coerce")
+    if feature_columns is None:
+        numeric_columns = [column for column in candidates if converted[column].notna().any()]
+        if not numeric_columns:
+            raise ValueError("The feature table does not contain numeric feature columns.")
+        converted = converted.loc[:, numeric_columns]
+        candidates = numeric_columns
+    values = converted.to_numpy(dtype=float)
+    return candidates, values
+
+
+def _labeled_matrix(
+    feature_table: pd.DataFrame,
+    positive_labels: Iterable[object],
+    *,
+    id_column: str | None,
+    feature_columns: Sequence[object] | None,
+) -> tuple[str, np.ndarray, np.ndarray, np.ndarray, list[object]]:
+    if not isinstance(feature_table, pd.DataFrame):
+        raise TypeError("feature_table must be a pandas DataFrame.")
+    identifier = _resolve_column(feature_table, id_column)
+    selected_columns, values = _numeric_features(feature_table, identifier, feature_columns)
+    identifiers = feature_table[identifier].astype("string").str.strip()
+    valid = identifiers.notna() & identifiers.ne("") & np.isfinite(values).all(axis=1)
+    if not valid.any():
+        raise ValueError("No complete rows remain after selecting numeric features.")
+    labels = _normalize_labels(positive_labels)
+    values = values[valid.to_numpy()]
+    clean_ids = identifiers.loc[valid].astype(str).to_numpy()
+    positive = np.isin(clean_ids, tuple(labels))
+    return str(identifier), clean_ids, values, positive, selected_columns
+
+
+def feature_ks_pvalues(positive: np.ndarray, negative: np.ndarray) -> np.ndarray:
+    """Return two-sample KS p-values for each feature column."""
+    positive_values = np.asarray(positive, dtype=float)
+    negative_values = np.asarray(negative, dtype=float)
+    if positive_values.ndim != 2 or negative_values.ndim != 2:
+        raise ValueError("positive and negative feature values must be two-dimensional.")
+    if not len(positive_values) or not len(negative_values):
+        raise ValueError("Feature selection requires both positive and negative rows.")
+    if positive_values.shape[1] != negative_values.shape[1]:
+        raise ValueError("Positive and negative feature matrices must have the same width.")
+    return np.asarray(
+        [
+            ks_2samp(positive_values[:, index], negative_values[:, index]).pvalue
+            for index in range(positive_values.shape[1])
+        ],
+        dtype=float,
     )
 
 
-def _method_palette(names: Sequence[str]) -> dict[str, tuple[float, float, float]]:
-    palette = sns.color_palette("colorblind", n_colors=max(len(names), 1))
-    return {name: palette[index] for index, name in enumerate(names)}
-
-
-def _validate_inputs(positive: np.ndarray, negative: np.ndarray, trials: int) -> str | None:
-    if trials < 2:
-        return "unable to create complete graph"
-    if len(positive) > len(negative):
-        return "unable to partition negatives"
-    if len(negative) < 2:
-        return "unable to partition negatives"
-    if len(positive[0]) != len(negative[0]):
-        return "inconsistent feature lengths"
-    return None
-
-
-def _normalize_model_name(model: str) -> str:
-    key = model.upper().replace(" ", "").replace("-", "").replace("_", "")
-    aliases = {
-        "SVR": "SVR",
-        "GBR": "GBR",
-        "GRADIENTBOOSTEDREGRESSION": "GBR",
-        "XGB": "XGB",
-        "XGBOOST": "XGB",
-        "MLP": "MLP",
-        "MULTILAYEREDPERCEPTRON": "MLP",
-        "LR": "LR",
-        "LOGISTICREGRESSION": "LR",
-        "GNB": "GNB",
-        "GAUSSIANNB": "GNB",
-        "GAUSSIANNAIVEBAYES": "GNB",
-        "DTR": "DTR",
-        "DECISIONTREEREGRESSOR": "DTR",
-    }
-    return aliases.get(key, model)
-
-
-def _build_predictor(model: str):
-    model_name = _normalize_model_name(model)
-    if model_name == "SVR":
-        return make_pipeline(StandardScaler(), SVR())
-    if model_name == "GBR":
-        return GradientBoostingRegressor(random_state=42)
-    if model_name == "XGB":
-        if xgb is None:
-            raise ImportError("xgboost is required when model='XGB'")
-        return xgb.XGBClassifier(
-            n_estimators=200,
-            learning_rate=0.05,
-            max_depth=4,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            eval_metric="logloss",
-            verbosity=0,
-        )
-    if model_name == "MLP":
-        return make_pipeline(
-            StandardScaler(),
-            MLPClassifier(
-                hidden_layer_sizes=(100, 50),
-                max_iter=2000,
-                early_stopping=False,
-                random_state=42,
-            ),
-        )
-    if model_name == "LR":
-        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=42))
-    if model_name == "GNB":
-        return GaussianNB()
-    if model_name == "DTR":
-        return DecisionTreeRegressor(random_state=42)
-    raise ValueError(f"Unsupported model: {model}")
-
-
-def _predict_scores(predictor, X: np.ndarray) -> np.ndarray:
-    if hasattr(predictor, "predict_proba"):
-        probabilities = predictor.predict_proba(X)
-        if probabilities.ndim == 2:
-            classes = getattr(predictor, "classes_", None)
-            if classes is not None:
-                positive_matches = np.where(np.asarray(classes) == 1)[0]
-                if len(positive_matches):
-                    return probabilities[:, positive_matches[0]]
-            return probabilities[:, -1]
-        return np.asarray(probabilities, dtype=float)
-    if hasattr(predictor, "decision_function"):
-        return np.asarray(predictor.decision_function(X), dtype=float)
-    return np.asarray(predictor.predict(X), dtype=float)
-
-
-def _coerce_feature_matrix(data: Sequence[Sequence[float]]) -> np.ndarray:
-    if isinstance(data, pd.DataFrame):
-        feature_frame = data
-        if feature_frame.shape[1] > 1 and not pd.api.types.is_numeric_dtype(feature_frame.dtypes.iloc[0]):
-            feature_frame = feature_frame.iloc[:, 1:]
-        return feature_frame.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-
-    array = np.asarray(data)
-    if array.ndim == 2 and array.shape[1] > 1 and not np.issubdtype(array.dtype, np.number):
-        try:
-            return np.asarray(array[:, 1:], dtype=float)
-        except (TypeError, ValueError):
-            return pd.DataFrame(array[:, 1:]).apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-    return np.asarray(array, dtype=float)
-
-
-def _select_features_with_ks_test(
+def select_features(
     positive: np.ndarray,
     negative: np.ndarray,
-    features_left: int | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    if features_left is None:
-        features_left = len(positive)
-
-    try:
-        features_left = max(1, min(features_left, positive.shape[1]))
-
-        p_val = []
-        for j in range(len(positive[0])):
-            _, p_value = stats.kstest(positive[:, j], negative[:, j])
-            p_val.append(p_value)
-    except Exception:
-        return positive, negative
-
-    if not p_val or features_left >= len(p_val):
-        return positive, negative
-
-    drop_ind = np.argpartition(p_val, features_left - 1)[features_left:]
-    try:
-        filtered_positive = np.delete(positive, drop_ind, axis=1)
-        filtered_negative = np.delete(negative, drop_ind, axis=1)
-    except Exception:
-        return positive, negative
-
-    if filtered_positive.shape[1] == 0 or filtered_negative.shape[1] == 0:
-        return positive, negative
-    return filtered_positive, filtered_negative
-
-
-def core_predict(
-    positive: Sequence[Sequence[float]],
-    negative: Sequence[Sequence[float]],
-    trials: int,
-    model: str = "GBR",
-    ks_test: bool = False,
-    features_left: int | None = None,
-    progress: bool = False,
-    progress_desc: str = "Prediction trials",
-):
-    positive_array = np.asarray(positive)
-    negative_array = np.asarray(negative)
-
-    error = _validate_inputs(positive_array, negative_array, trials)
-    if error is not None:
-        return error
-
-    pos = np.copy(positive_array)
-    neg = np.copy(negative_array)
-
-    index = 0
-    size = len(pos)
-    train_negative_count = min(size, len(neg) - 1)
-    scores = np.zeros(len(neg))
-    number = np.zeros(len(neg))
-
-    if ks_test:
-        pos, neg = _select_features_with_ks_test(pos, neg, features_left)
-
-    pos = np.concatenate([pos, np.ones(len(positive_array))[:, np.newaxis]], axis=1)
-    neg = np.concatenate(
-        [
-            np.arange(len(negative_array))[:, np.newaxis],
-            neg,
-            np.zeros(len(negative_array))[:, np.newaxis],
-        ],
-        axis=1,
-    )
-
-    for _ in tqdm(range(trials), desc=progress_desc, disable=not progress):
-        train_indices = np.arange(index, index + train_negative_count)
-        mat = np.concatenate([pos, neg[train_indices, 1:]])
-        X = mat[:, :-1]
-        y = mat[:, -1]
-
-        predictor = _build_predictor(model).fit(X, y)
-        neg_test = np.delete(neg, train_indices, axis=0)
-        for row_index, value in enumerate(_predict_scores(predictor, neg_test[:, 1:-1])):
-            scores[int(neg_test[row_index, 0])] += value
-            number[int(neg_test[row_index, 0])] += 1
-
-        index += train_negative_count
-        if index + train_negative_count > len(neg):
-            index = 0
-            np.random.shuffle(neg)
-
-    return np.divide(scores, number, out=np.zeros_like(scores), where=number > 0)
-
-
-def LOOCV(
-    positive: Sequence[Sequence[float]],
-    negative: Sequence[Sequence[float]],
-    trials: int,
-    model: str = "GBR",
-    ks_test: bool = False,
-    features_left: int | None = None,
-    graph: bool = False,
-    equation: bool = False,
-    progress: bool = False,
-):
-    positive_array = np.asarray(positive)
-    negative_array = np.asarray(negative)
-
-    ranks = []
-    for i in tqdm(range(len(positive_array)), desc="LOOCV positives", disable=not progress):
-        result = np.concatenate(
-            [
-                [np.append(np.zeros(len(negative_array)), 1)],
-                [
-                    core_predict(
-                        np.delete(positive_array, i, axis=0),
-                        np.concatenate([negative_array, [positive_array[i]]], axis=0),
-                        trials,
-                        model=model,
-                        ks_test=ks_test,
-                        features_left=features_left,
-                    )
-                ],
-            ],
-            axis=0,
-        )
-        result = result[:, np.flip(result[1].argsort())]
-        ranks.append(np.where(result[0] == 1)[0][0])
-
-    values, base = np.histogram(ranks, bins=len(negative_array) + 1, range=(0, len(negative_array) + 1))
-    cumulative = np.cumsum(values)
-    area = np.sum(cumulative) / (len(positive_array) * (len(negative_array) + 1))
-
-    if graph:
-        _set_publication_theme()
-        plt.figure(figsize=(6.5, 4.2))
-        plt.step(base[:-1], cumulative, where="post", linewidth=2.2, color=sns.color_palette("deep")[0])
-        plt.title(f"LOOCV Curve (Area = {area:.3f})")
-        plt.xlabel("Rank Threshold")
-        plt.ylabel("Recovered Positives")
-        sns.despine()
-        plt.tight_layout()
-        plt.show()
-
-    if equation:
-        return area, base[:-1], cumulative
-    return area
-
-
-def LOOCV_grouped_plot(
-    data_dict: Mapping[str, tuple[Sequence[Sequence[float]], Sequence[Sequence[float]]]],
-    trials: int,
-    models: Sequence[str] = ("SVR", "XGB", "GBR", "MLP", "LR", "GNB"),
-    ks_test: bool | Mapping[str, bool] = False,
-    features_left: int | None = None,
-    figsize: tuple[int, int] = (14, 8),
+    *,
+    n_features: int | None = None,
 ) -> np.ndarray:
-    methods = list(data_dict.keys())
-    results = np.zeros((len(methods), len(models)))
-    results[:] = np.nan
-
-    for i, method in enumerate(methods):
-        positive, negative = data_dict[method]
-        positive_values = _coerce_feature_matrix(positive)
-        negative_values = _coerce_feature_matrix(negative)
-
-        if (
-            positive_values.ndim != 2
-            or negative_values.ndim != 2
-            or len(positive_values) == 0
-            or len(negative_values) == 0
-            or positive_values.shape[1] == 0
-            or negative_values.shape[1] == 0
-        ):
-            print(f"Skipping {method}: insufficient usable feature data")
-            continue
-
-        for j, model in enumerate(models):
-            print(f"Running {method} - {model}")
-            try:
-                use_ks_test = ks_test.get(method, False) if isinstance(ks_test, Mapping) else ks_test
-                results[i, j] = LOOCV(
-                    positive_values,
-                    negative_values,
-                    trials,
-                    model=model,
-                    ks_test=use_ks_test,
-                    features_left=features_left,
-                    graph=False,
-                )
-            except Exception as exc:
-                print(f"Skipping {method} - {model}: {exc}")
-
-    x = np.arange(len(methods))
-    plot_df = pd.DataFrame(results, index=methods, columns=models).reset_index(names="Method")
-    plot_df = plot_df.melt(id_vars="Method", var_name="Model", value_name="LOOCV AUC")
-
-    _set_publication_theme()
-    plt.figure(figsize=figsize)
-    ax = sns.barplot(
-        data=plot_df,
-        x="Method",
-        y="LOOCV AUC",
-        hue="Model",
-        palette="colorblind",
-        errorbar=None,
-    )
-    ax.set_ylabel("LOOCV Area")
-    ax.set_xlabel("")
-    ax.set_title("LOOCV Rank-Recovery Area by Data Conversion Method")
-    ax.set_ylim(0.5, 1)
-    plt.xticks(rotation=20, ha="right")
-    ax.legend(title="Model", frameon=False, ncol=min(3, len(models)))
-    sns.despine()
-    plt.tight_layout()
-    plt.show()
-
-    return results
+    """Select the most class-separating columns by KS-test p-value."""
+    pvalues = feature_ks_pvalues(positive, negative)
+    if n_features is None:
+        count = len(pvalues)
+    elif isinstance(n_features, int) and not isinstance(n_features, bool) and n_features > 0:
+        count = min(n_features, len(pvalues))
+    else:
+        raise ValueError("n_features must be a positive integer or None.")
+    return np.sort(np.argsort(pvalues)[:count])
 
 
-def KFold_ROC_AUC_grouped_plot(
-    data_dict: Mapping[str, tuple[Sequence[Sequence[float]], Sequence[Sequence[float]]]],
-    models: Sequence[str] = ("SVR", "XGB", "GBR", "MLP", "LR", "GNB"),
-    ks_test: bool | Mapping[str, bool] = False,
-    features_left: int | None = None,
-    n_splits: int = 5,
-    figsize: tuple[int, int] = (14, 8),
-    random_state: int = 42,
-) -> np.ndarray:
-    methods = list(data_dict.keys())
-    results = np.zeros((len(methods), len(models)))
-    results[:] = np.nan
-
-    for i, method in enumerate(methods):
-        positive, negative = data_dict[method]
-        positive_values = _coerce_feature_matrix(positive)
-        negative_values = _coerce_feature_matrix(negative)
-
-        if (
-            positive_values.ndim != 2
-            or negative_values.ndim != 2
-            or len(positive_values) == 0
-            or len(negative_values) == 0
-            or positive_values.shape[1] == 0
-            or negative_values.shape[1] == 0
-        ):
-            print(f"Skipping {method}: insufficient usable feature data")
-            continue
-
-        for j, model in enumerate(models):
-            print(f"Running {method} - {model}")
-            try:
-                use_ks_test = ks_test.get(method, False) if isinstance(ks_test, Mapping) else ks_test
-                results[i, j] = KFold_ROC_AUC(
-                    positive_values,
-                    negative_values,
-                    model=model,
-                    ks_test=use_ks_test,
-                    features_left=features_left,
-                    n_splits=n_splits,
-                    graph=False,
-                    random_state=random_state,
-                )
-            except Exception as exc:
-                print(f"Skipping {method} - {model}: {exc}")
-
-    plot_df = pd.DataFrame(results, index=methods, columns=models).reset_index(names="Method")
-    plot_df = plot_df.melt(id_vars="Method", var_name="Model", value_name="ROC AUC")
-
-    _set_publication_theme()
-    plt.figure(figsize=figsize)
-    ax = sns.barplot(
-        data=plot_df,
-        x="Method",
-        y="ROC AUC",
-        hue="Model",
-        palette="colorblind",
-        errorbar=None,
-    )
-    ax.set_ylabel("ROC AUC")
-    ax.set_xlabel("")
-    ax.set_title("Cross-Validated ROC AUC by Data Conversion Method")
-    ax.set_ylim(0.45, 1)
-    plt.xticks(rotation=20, ha="right")
-    ax.legend(title="Model", frameon=False, ncol=min(3, len(models)))
-    sns.despine()
-    plt.tight_layout()
-    plt.show()
-
-    return results
-
-
-def KFold_ROC_AUC(
-    positive: Sequence[Sequence[float]],
-    negative: Sequence[Sequence[float]],
-    model: str = "GBR",
-    ks_test: bool = False,
-    features_left: int | None = None,
-    n_splits: int = 5,
-    graph: bool = False,
-    random_state: int = 42,
-):
-    positive_array = np.asarray(positive)
-    negative_array = np.asarray(negative)
-
-    X = np.vstack([positive_array, negative_array])
-    y = np.concatenate([np.ones(len(positive_array)), np.zeros(len(negative_array))])
-
-    splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    all_scores = []
-    all_true = []
-
-    for train_idx, test_idx in splitter.split(X, y):
-        X_train = X[train_idx]
-        y_train = y[train_idx]
-        X_test = X[test_idx]
-        y_test = y[test_idx]
-
-        if ks_test:
-            try:
-                pos_train = X_train[y_train == 1]
-                neg_train = X_train[y_train == 0]
-                selected_features = min(
-                    features_left if features_left is not None else len(pos_train),
-                    X_train.shape[1],
-                )
-                selected_features = max(1, selected_features)
-                p_values = [
-                    stats.kstest(pos_train[:, feature_index], neg_train[:, feature_index]).pvalue
-                    for feature_index in range(X_train.shape[1])
-                ]
-                if selected_features < len(p_values):
-                    keep_indices = np.argpartition(p_values, selected_features - 1)[:selected_features]
-                    keep_indices = np.sort(keep_indices)
-                    X_train = X_train[:, keep_indices]
-                    X_test = X_test[:, keep_indices]
-            except Exception:
-                pass
-
-        predictor = _build_predictor(model).fit(X_train, y_train)
-        test_scores = _predict_scores(predictor, X_test)
-        all_scores.extend(test_scores)
-        all_true.extend(y_test)
-
-    all_scores = np.asarray(all_scores)
-    all_true = np.asarray(all_true)
-    auc = roc_auc_score(all_true, all_scores)
-
-    if graph:
-        fpr, tpr, _ = roc_curve(all_true, all_scores)
-        _set_publication_theme()
-        plt.figure(figsize=(6, 4.5))
-        sns.lineplot(x=fpr, y=tpr, linewidth=2.2, color=sns.color_palette("deep")[0])
-        plt.plot([0, 1], [0, 1], linestyle="--", color="0.5", linewidth=1.2)
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title(f"ROC Curve (AUC = {auc:.3f})")
-        sns.despine()
-        plt.tight_layout()
-        plt.show()
-
-    return auc
-
-
-def KFold_PR(
-    positive: Sequence[Sequence[float]],
-    negative: Sequence[Sequence[float]],
-    trials: int,
-    model: str = "GBR",
-    ks_test: bool = False,
-    features_left: int | None = None,
-    n_splits: int = 5,
-    graph: bool = False,
-    random_state: int = 42,
-    progress: bool = False,
-    progress_desc: str = "Precision-recall folds",
-):
-    positive_array = np.asarray(positive)
-    negative_array = np.asarray(negative)
-
-    X = np.vstack([positive_array, negative_array])
-    y = np.concatenate([np.ones(len(positive_array)), np.zeros(len(negative_array))])
-
-    splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    all_scores = []
-    all_true = []
-
-    folds = splitter.split(X, y)
-    for train_idx, test_idx in tqdm(folds, total=n_splits, desc=progress_desc, disable=not progress):
-        X_train = X[train_idx]
-        y_train = y[train_idx]
-        X_test = X[test_idx]
-        y_test = y[test_idx]
-
-        if ks_test:
-            try:
-                pos_train = X_train[y_train == 1]
-                neg_train = X_train[y_train == 0]
-                selected_features = min(
-                    features_left if features_left is not None else len(pos_train),
-                    X_train.shape[1],
-                )
-                selected_features = max(1, selected_features)
-                p_values = [
-                    stats.kstest(pos_train[:, feature_index], neg_train[:, feature_index]).pvalue
-                    for feature_index in range(X_train.shape[1])
-                ]
-                if selected_features < len(p_values):
-                    keep_indices = np.argpartition(p_values, selected_features - 1)[:selected_features]
-                    keep_indices = np.sort(keep_indices)
-                    X_train = X_train[:, keep_indices]
-                    X_test = X_test[:, keep_indices]
-            except Exception:
-                pass
-
-        predictor = _build_predictor(model).fit(X_train, y_train)
-        test_scores = _predict_scores(predictor, X_test)
-        all_scores.extend(test_scores)
-        all_true.extend(y_test)
-
-    all_scores = np.array(all_scores)
-    all_true = np.array(all_true)
-
-    precision, recall, _ = precision_recall_curve(all_true, all_scores)
-    average_precision = average_precision_score(all_true, all_scores)
-
-    if graph:
-        _set_publication_theme()
-        plt.figure(figsize=(6, 4.5))
-        sns.lineplot(x=recall, y=precision, linewidth=2.2, color=sns.color_palette("deep")[0])
-        plt.xlabel("Recall")
-        plt.ylabel("Precision")
-        plt.title(f"Precision-Recall Curve (AP = {average_precision:.3f})")
-        sns.despine()
-        plt.tight_layout()
-        plt.show()
-
-    return average_precision, recall, precision
-
-
-def area_table(
-    positive: Sequence[Sequence[float]],
-    negative: Sequence[Sequence[float]],
-    trials: int,
-    model: str = "SVR",
-    feat_arr: Sequence[int] = (),
-) -> list[float]:
-    areas = []
-    for value in feat_arr:
-        print(value)
-        areas.append(LOOCV(positive, negative, trials, model=model, ks_test=True, features_left=value))
-    return areas
-
-
-def ks_pvalue(pos: Sequence[Sequence[float]], neg: Sequence[Sequence[float]]):
-    pos_array = np.asarray(pos)
-    neg_array = np.asarray(neg)
-
-    if len(pos_array[0]) != len(neg_array[0]):
-        return "inconsistent feature lengths"
-
-    p_val = np.zeros(len(pos_array[0]))
-    for j in range(0, len(pos_array[0])):
-        _, p_value = stats.kstest(pos_array[:, j], neg_array[:, j])
-        p_val[j] = p_value
-    return p_val
-
-
-def heatmap(
-    data: Sequence[float],
-    dimensions: Sequence[Sequence[int]],
-    cmap: str = "hot",
-    min: float | None = None,
-    max: float | None = None,
-    flip: bool = False,
-    axes: bool = False,
-    colorbar: bool = False,
-) -> None:
-    _set_publication_theme()
-    index = 0
-    for dim in dimensions:
-        matrix = np.reshape(data[index : index + dim[0] * dim[1]], (dim[0], dim[1]))
-        if flip:
-            matrix = np.flip(matrix, 0)
-        plt.figure(figsize=(4.6, 3.8))
-        heatmap_kwargs = {
-            "cmap": cmap,
-            "cbar": colorbar,
-            "square": False,
-            "xticklabels": axes,
-            "yticklabels": axes,
-        }
-        if min is not None and max is not None:
-            heatmap_kwargs["vmin"] = min
-            heatmap_kwargs["vmax"] = max
-        ax = sns.heatmap(matrix, **heatmap_kwargs)
-        if not axes:
-            ax.set_xticks([])
-            ax.set_yticks([])
-        sns.despine(left=not axes, bottom=not axes)
-        plt.tight_layout()
-        plt.show()
-        index += dim[0] * dim[1]
-
-
-def importance_test(
-    positive: Sequence[Sequence[float]],
-    negative: Sequence[Sequence[float]],
-    trials: int,
-    isks: bool,
-    num_left: int | None = None,
-) -> list[np.ndarray] | str:
-    positive_array = np.asarray(positive)
-    negative_array = np.asarray(negative)
-
-    error = _validate_inputs(positive_array, negative_array, trials)
-    if error is not None:
-        return error
-
-    pos = np.concatenate([np.copy(positive_array), np.ones(len(positive_array))[:, np.newaxis]], axis=1)
-    neg = np.concatenate(
-        [
-            np.arange(len(negative_array))[:, np.newaxis],
-            np.copy(negative_array),
-            np.zeros(len(negative_array))[:, np.newaxis],
-        ],
-        axis=1,
-    )
-
-    index = 0
-    size = len(pos)
-    out = []
-
-    for trial_index in range(trials):
-        mat = np.concatenate([pos, neg[index : index + size, 1:]])
-        features = mat[:, :-1]
-        labels = mat[:, -1]
-
-        if isks:
-            feature_values = features[:, :-1]
-            keep = num_left if num_left is not None else feature_values.shape[1]
-            filtered_pos, filtered_neg = _select_features_with_ks_test(
-                feature_values[:size],
-                feature_values[size:],
-                keep,
-            )
-            features = np.vstack(
-                [
-                    np.concatenate([filtered_pos, features[:size, -1][:, np.newaxis]], axis=1),
-                    np.concatenate([filtered_neg, features[size:, -1][:, np.newaxis]], axis=1),
-                ]
-            )
-
-        predictor = SVR().fit(features, labels)
-        results = permutation_importance(
-            predictor,
-            features,
-            labels,
-            n_repeats=10,
-            random_state=trial_index,
+def _build_classifier(model: str, random_state: int):
+    if model == "logistic_regression":
+        return make_pipeline(
+            StandardScaler(), LogisticRegression(max_iter=1_000, random_state=random_state)
         )
-        importance = results.importances_mean
-        _set_publication_theme()
-        plt.figure(figsize=(7, 4))
-        sns.barplot(x=[value for value in range(len(importance))], y=importance, color=sns.color_palette("deep")[0], errorbar=None)
-        plt.xlabel("Feature Index")
-        plt.ylabel("Permutation Importance")
-        sns.despine()
-        plt.tight_layout()
-        plt.show()
-        out.append(importance)
-
-        index += size
-        if index + size > len(neg):
-            index = 0
-            np.random.shuffle(neg)
-
-    return out
+    if model == "random_forest":
+        return RandomForestClassifier(n_estimators=300, random_state=random_state, n_jobs=1)
+    if model == "gradient_boosting":
+        return GradientBoostingClassifier(random_state=random_state)
+    if model == "svm":
+        return make_pipeline(StandardScaler(), SVC(probability=True, random_state=random_state))
+    allowed = ", ".join(MODEL_NAMES)
+    raise ValueError(f"Unsupported model {model!r}; choose one of: {allowed}.")
 
 
-def _numeric_feature_values(dataframe: pd.DataFrame, id_column: str | None = None) -> np.ndarray:
-    """Return the numeric feature portion of a labeled feature table.
-
-    ``rank_candidates`` and ``evaluate_labeled_features`` intentionally accept
-    a normal feature DataFrame rather than a package-specific container.  The
-    identifier defaults to the first column, matching the feature builders.
-    """
-    if dataframe.shape[1] < 2:
-        raise ValueError("A feature table must contain an identifier and at least one feature column.")
-
-    resolved_id = id_column or str(dataframe.columns[0])
-    if resolved_id not in dataframe.columns:
-        raise ValueError(f"Identifier column {resolved_id!r} was not found.")
-    numeric = dataframe.drop(columns=resolved_id).apply(pd.to_numeric, errors="coerce")
-    if numeric.shape[1] == 0:
-        raise ValueError("A feature table must contain at least one numeric feature column.")
-    values = numeric.to_numpy(dtype=float)
-    if not np.isfinite(values).all():
-        raise ValueError("Feature tables passed to modeling must not contain missing or non-numeric values.")
-    return values
+def _positive_scores(classifier, values: np.ndarray) -> np.ndarray:
+    probabilities = classifier.predict_proba(values)
+    classes = np.asarray(classifier.classes_)
+    return probabilities[:, np.flatnonzero(classes == 1)[0]]
 
 
 def rank_candidates(
@@ -758,53 +158,58 @@ def rank_candidates(
     positive_labels: Iterable[object],
     *,
     id_column: str | None = None,
+    feature_columns: Sequence[object] | None = None,
+    model: str = "logistic_regression",
     trials: int = 100,
-    model: str = "GBR",
-    ks_test: bool = True,
-    features_left: int | None = None,
+    feature_selection: bool = True,
+    n_features: int | None = None,
+    random_state: int = 42,
     progress: bool = False,
 ) -> pd.DataFrame:
-    """Rank unlabeled rows using known positive labels.
+    """Rank non-positive rows using repeated balanced positive/unlabeled fits.
 
-    Parameters
-    ----------
-    feature_table:
-        A table with one identifier column and numeric feature columns.
-    positive_labels:
-        Entity identifiers considered positive.  All other rows are candidates.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Candidate identifiers and descending model scores.
+    The known-positive rows train the positive class. Each trial samples an
+    equally sized subset of the remaining rows as provisional negatives, then
+    averages predicted positive probabilities across all candidate rows.
     """
-    from .labels import split_labeled_rows
-
-    positive, candidates = split_labeled_rows(
+    if isinstance(trials, bool) or not isinstance(trials, int) or trials < 1:
+        raise ValueError("trials must be a positive integer.")
+    identifier, identifiers, values, positive_mask, _ = _labeled_matrix(
         feature_table,
         positive_labels,
         id_column=id_column,
-        drop_missing=True,
+        feature_columns=feature_columns,
     )
-    if positive.empty or candidates.empty:
-        raise ValueError("Ranking requires at least one labeled positive and one unlabeled candidate.")
+    positive_values, candidate_values = values[positive_mask], values[~positive_mask]
+    candidate_ids = identifiers[~positive_mask]
+    if not len(positive_values) or not len(candidate_values):
+        raise ValueError(
+            "Ranking requires at least one positive row and one unlabeled candidate row."
+        )
 
-    resolved_id = id_column or str(feature_table.columns[0])
-    scores = core_predict(
-        _numeric_feature_values(positive, resolved_id),
-        _numeric_feature_values(candidates, resolved_id),
-        trials,
-        model=model,
-        ks_test=ks_test,
-        features_left=features_left,
-        progress=progress,
-        progress_desc="Candidate ranking trials",
-    )
-    if isinstance(scores, str):
-        raise ValueError(scores)
+    rng = np.random.default_rng(random_state)
+    scores = np.zeros(len(candidate_values), dtype=float)
+    sample_size = min(len(positive_values), len(candidate_values))
+    for trial in tqdm(range(trials), desc="Candidate ranking", disable=not progress):
+        positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
+        negative_index = rng.choice(len(candidate_values), size=sample_size, replace=False)
+        train_positive = positive_values[positive_index]
+        train_negative = candidate_values[negative_index]
+        selected = (
+            select_features(train_positive, train_negative, n_features=n_features)
+            if feature_selection
+            else np.arange(values.shape[1])
+        )
+        train_values = np.vstack([train_positive[:, selected], train_negative[:, selected]])
+        train_labels = np.concatenate(
+            [np.ones(sample_size, dtype=int), np.zeros(sample_size, dtype=int)]
+        )
+        classifier = _build_classifier(model, random_state + trial).fit(train_values, train_labels)
+        scores += _positive_scores(classifier, candidate_values[:, selected])
+    scores /= trials
     return (
-        pd.DataFrame({resolved_id: candidates[resolved_id].to_numpy(), "score": scores})
-        .sort_values("score", ascending=False)
+        pd.DataFrame({identifier: candidate_ids, "score": scores})
+        .sort_values("score", ascending=False, kind="stable")
         .reset_index(drop=True)
     )
 
@@ -814,12 +219,7 @@ def rank_unlabeled(
     positive_labels: Iterable[object],
     **kwargs: object,
 ) -> pd.DataFrame:
-    """Compatibility-friendly name for :func:`rank_candidates`.
-
-    ``unlabeled`` is more precise than ``negative`` for the common setting
-    where every row outside the known-positive set is a candidate rather than
-    a confirmed negative example.
-    """
+    """Alias for :func:`rank_candidates` that emphasizes unlabeled rows."""
     return rank_candidates(feature_table, positive_labels, **kwargs)
 
 
@@ -828,61 +228,76 @@ def evaluate_labeled_features(
     positive_labels: Iterable[object],
     *,
     id_column: str | None = None,
-    model: str = "GBR",
-    trials: int = 25,
-    ks_test: bool = False,
-    features_left: int | None = None,
+    feature_columns: Sequence[object] | Mapping[str, Sequence[object]] | None = None,
+    model: str = "logistic_regression",
     n_splits: int = 5,
+    feature_selection: bool = False,
+    n_features: int | None = None,
     random_state: int = 42,
 ) -> pd.DataFrame:
-    """Evaluate one or more feature tables against a positive-label set.
+    """Cross-validate one or more labeled feature tables.
 
-    The returned table contains ROC AUC and average precision where the class
-    counts support stratified cross-validation.  This is deliberately a small
-    table-oriented API; plotting remains available through the lower-level
-    legacy helpers in this module.
+    Returns ROC AUC and average precision for each table. Non-numeric metadata
+    is ignored by default; pass ``feature_columns`` to select features
+    explicitly, especially for pair-table data.
     """
-    from .labels import split_labeled_rows
-
-    tables = {"features": feature_tables} if isinstance(feature_tables, pd.DataFrame) else feature_tables
+    positive_label_set = _normalize_labels(positive_labels)
+    tables = (
+        {"features": feature_tables}
+        if isinstance(feature_tables, pd.DataFrame)
+        else dict(feature_tables)
+    )
     rows: list[dict[str, object]] = []
     for name, table in tables.items():
-        positive, negative = split_labeled_rows(
-            table,
-            positive_labels,
-            id_column=id_column,
-            drop_missing=True,
+        selected_columns = (
+            feature_columns.get(name) if isinstance(feature_columns, Mapping) else feature_columns
         )
-        resolved_id = id_column or str(table.columns[0])
-        row = {
+        _, _, values, positive_mask, used_columns = _labeled_matrix(
+            table,
+            positive_label_set,
+            id_column=id_column,
+            feature_columns=selected_columns,
+        )
+        targets = positive_mask.astype(int)
+        positives, negatives = int(targets.sum()), int((targets == 0).sum())
+        row: dict[str, object] = {
             "method": str(name),
-            "positive_rows": len(positive),
-            "negative_rows": len(negative),
+            "positive_rows": positives,
+            "negative_rows": negatives,
+            "feature_columns": len(used_columns),
             "roc_auc": np.nan,
             "average_precision": np.nan,
         }
-        folds = min(n_splits, len(positive), len(negative))
+        folds = min(n_splits, positives, negatives)
         if folds >= 2:
-            positive_values = _numeric_feature_values(positive, resolved_id)
-            negative_values = _numeric_feature_values(negative, resolved_id)
-            row["roc_auc"] = KFold_ROC_AUC(
-                positive_values,
-                negative_values,
-                model=model,
-                ks_test=ks_test,
-                features_left=features_left,
-                n_splits=folds,
-                random_state=random_state,
-            )
-            row["average_precision"] = KFold_PR(
-                positive_values,
-                negative_values,
-                trials,
-                model=model,
-                ks_test=ks_test,
-                features_left=features_left,
-                n_splits=folds,
-                random_state=random_state,
-            )[0]
+            scores = np.empty(len(values), dtype=float)
+            splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+            for fold, (train_index, test_index) in enumerate(splitter.split(values, targets)):
+                train_values, test_values = values[train_index], values[test_index]
+                train_labels = targets[train_index]
+                if feature_selection:
+                    selected = select_features(
+                        train_values[train_labels == 1],
+                        train_values[train_labels == 0],
+                        n_features=n_features,
+                    )
+                else:
+                    selected = np.arange(values.shape[1])
+                classifier = _build_classifier(model, random_state + fold).fit(
+                    train_values[:, selected], train_labels
+                )
+                scores[test_index] = _positive_scores(classifier, test_values[:, selected])
+            row["roc_auc"] = float(roc_auc_score(targets, scores))
+            row["average_precision"] = float(average_precision_score(targets, scores))
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+__all__ = [
+    "MODEL_NAMES",
+    "evaluate_labeled_features",
+    "feature_ks_pvalues",
+    "rank_candidates",
+    "rank_unlabeled",
+    "select_features",
+]
