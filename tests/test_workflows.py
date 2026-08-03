@@ -1,13 +1,24 @@
 import sys
 import tempfile
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pdm_learn.workflows import oncogene, ppi
+
+
+def _ppi_feature_script():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "ppi" / "make_features.py"
+    spec = spec_from_file_location("ppi_make_features", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _matrices() -> dict[str, pd.DataFrame]:
@@ -89,6 +100,66 @@ class WorkflowTests(unittest.TestCase):
         features = ppi.build_features(datasets, pairs, methods=("pearson",))
 
         self.assertEqual(features["pearson"].shape, (2, 27))
+
+    def test_ppi_script_symmetrizes_undirected_pairs_and_removes_duplicates(self) -> None:
+        datasets = {
+            "gene_exp": _matrices()["expression"],
+            "copy_num": _matrices()["copy_number"],
+            "shRNA": _matrices()["shrna"],
+            "gene_mut": _matrices()["mutation"],
+            "CRISPR": _matrices()["crispr"],
+        }
+        script = _ppi_feature_script()
+        forward = script.build_symmetric_features(
+            datasets,
+            pd.DataFrame(
+                {
+                    "Gene1": ["A", "A"],
+                    "Gene2": ["B", "B"],
+                    "pair": ["A.B", "A.B"],
+                    "canonical_pair": ["A.B", "A.B"],
+                }
+            ),
+        )
+        reverse = script.build_symmetric_features(
+            datasets,
+            pd.DataFrame(
+                {
+                    "Gene1": ["B"],
+                    "Gene2": ["A"],
+                    "pair": ["B.A"],
+                    "canonical_pair": ["A.B"],
+                }
+            ),
+        )
+        columns = ppi.pdm_feature_columns(forward)
+
+        self.assertEqual(len(forward), 1)
+        np.testing.assert_allclose(forward.loc[:, columns], reverse.loc[:, columns])
+
+    def test_ppi_negative_controls_are_sampled_only_from_supplied_candidates(self) -> None:
+        complexes = pd.DataFrame(
+            {
+                "Complex Name": ["first"],
+                "Representative Genes (Core Members)": ["['A', 'B']"],
+            }
+        )
+        candidates = pd.DataFrame(
+            {
+                "Gene1": ["A", "A", "C"],
+                "Gene2": ["B", "C", "D"],
+            }
+        )
+
+        controls = ppi.sample_negative_control_pairs(
+            complexes,
+            gene_universe=["A", "B", "C", "D"],
+            candidate_pairs=candidates,
+            count=2,
+            rng=np.random.default_rng(7),
+        )
+
+        self.assertEqual(set(controls["canonical_pair"]), {"A.C", "C.D"})
 
 
 if __name__ == "__main__":

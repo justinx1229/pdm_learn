@@ -42,6 +42,12 @@ class ModelingTests(unittest.TestCase):
 
         self.assertEqual(set(ranking["entity"]), {"D", "E", "F"})
         self.assertTrue(ranking["score"].between(0, 1).all())
+        self.assertTrue((ranking["score_trials"] >= 1).all())
+
+    def test_ranking_cross_fits_every_candidate_in_each_trial(self) -> None:
+        ranking = rank_candidates(self.table, self.labels, trials=2, random_state=7)
+
+        self.assertTrue((ranking["score_trials"] == 2).all())
 
     def test_evaluation_returns_cross_validated_scores(self) -> None:
         result = evaluate_labeled_features(
@@ -54,6 +60,20 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(result["negative_rows"].tolist(), [3, 3])
         self.assertTrue(np.isfinite(result["roc_auc"]).all())
         self.assertTrue(np.isfinite(result["average_precision"]).all())
+
+    def test_evaluation_uses_explicit_labels_and_grouped_folds(self) -> None:
+        result = evaluate_labeled_features(
+            self.table,
+            {"A", "B", "C"},
+            negative_labels={"D", "E", "F"},
+            groups=["p1", "p2", "p3", "n1", "n2", "n3"],
+            n_splits=3,
+        )
+
+        self.assertEqual(result["positive_rows"].tolist(), [3])
+        self.assertEqual(result["negative_rows"].tolist(), [3])
+        self.assertEqual(result["cv_strategy"].tolist(), ["stratified_group_kfold"])
+        self.assertTrue(np.isfinite(result["roc_auc"]).all())
 
 
 if __name__ == "__main__":

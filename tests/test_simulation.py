@@ -1,5 +1,6 @@
 import sys
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,15 @@ from pdm_learn.simulation import (
     iter_simulated_pairs,
     perturb_pair,
 )
+
+
+def _simulation_feature_script():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "simulation" / "make_features.py"
+    spec = spec_from_file_location("simulation_make_features", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class SimulationTests(unittest.TestCase):
@@ -65,6 +75,13 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(metric.shape, (4, 1))
         self.assertEqual(density.shape, (4, 25))
         self.assertTrue(np.isfinite(density.to_numpy()).all())
+
+    def test_simulation_seed_pairs_retain_standardized_benchmark_design(self) -> None:
+        seed_pairs = _simulation_feature_script().build_positive_base()
+
+        self.assertEqual(seed_pairs.shape, (8, 500))
+        self.assertTrue(np.allclose(seed_pairs.mean(axis=1), 0.0))
+        self.assertTrue(np.allclose(seed_pairs.std(axis=1, ddof=0), 1.0))
 
 
 if __name__ == "__main__":

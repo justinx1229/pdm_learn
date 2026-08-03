@@ -57,11 +57,19 @@ for the packaged dependency lock and configuration:
 
 ```text
 runs/full/oncogene/results/oncogene_ranking.csv
-runs/full/oncogene/results/oncogene_method_benchmarks.csv
+runs/full/oncogene/results/oncogene_ks_pvalues.csv
 runs/full/ppi/results/ranked_PPI_pairs_cancer.csv
-runs/full/ppi/results/ppi_benchmark.csv
+runs/full/ppi/results/ppi_control_benchmarks.csv
 runs/full/simulation/results/simulation_benchmarks.csv
 ```
+
+The oncogene workflow is positive-unlabelled ranking. It deliberately does
+not report ROC AUC or average precision unless you provide a separate,
+explicit negative-label file to `scripts/oncogene/run_predictions.py`.
+PPI control results use held-out cancer-complex groups. Negative controls are
+sampled from the supplied BioGRID candidate-pair table after removing pairs in
+the curated complex catalogue; they are not claims of experimentally confirmed
+noninteraction.
 
 ## Fast verification
 

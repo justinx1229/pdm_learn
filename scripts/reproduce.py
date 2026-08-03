@@ -70,8 +70,18 @@ def _settings(profile: str) -> dict[str, dict[str, object]]:
     settings = json.loads(CONFIG_PATH.read_text())
     if profile == "smoke":
         settings["oncogene"].update({"ranking_trials": 3, "n_splits": 2})
-        settings["ppi"].update({"trials": 3, "n_splits": 2})
-        settings["simulation"].update({"negative_repeats": 3, "n_splits": 2})
+        settings["ppi"].update(
+            {
+                "trials": 3,
+                "n_splits": 2,
+                "controls": 1,
+                "max_pairs_per_complex": 1,
+                "negative_pairs": 3,
+            }
+        )
+        settings["simulation"].update(
+            {"positive_repeats": 1, "negative_repeats": 3, "n_splits": 2}
+        )
     return settings
 
 
@@ -113,12 +123,16 @@ def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) 
 def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> None:
     features = output_dir / "ppi" / "features"
     results = output_dir / "ppi" / "results"
+    controls = output_dir / "ppi" / "controls"
+    biogrid = data_dir / "clean_biogrid_interactions.csv"
     _run(
         [
             sys.executable,
             str(PROJECT_ROOT / "scripts" / "ppi" / "make_features.py"),
             "--data-dir",
             str(data_dir),
+            "--biogrid",
+            str(biogrid),
             "--output-dir",
             str(features),
         ]
@@ -129,6 +143,28 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
         else "cancer_complexes_clean.xlsx"
     )
     complexes = data_dir / complex_name
+    _run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "ppi" / "make_controls.py"),
+            "--data-dir",
+            str(data_dir),
+            "--complexes",
+            str(complexes),
+            "--output-dir",
+            str(controls),
+            "--controls",
+            str(settings["controls"]),
+            "--max-pairs-per-complex",
+            str(settings["max_pairs_per_complex"]),
+            "--negative-pairs",
+            str(settings["negative_pairs"]),
+            "--negative-pair-candidates",
+            str(biogrid),
+            "--random-state",
+            str(settings["random_state"]),
+        ]
+    )
     _run(
         [
             sys.executable,
@@ -147,6 +183,10 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
             str(settings["n_splits"]),
             "--random-state",
             str(settings["random_state"]),
+            "--positive-controls",
+            str(controls / "positive_controls.pkl"),
+            "--negative-controls",
+            str(controls / "negative_controls.pkl"),
         ]
     )
 
@@ -160,6 +200,8 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
             str(PROJECT_ROOT / "scripts" / "simulation" / "make_features.py"),
             "--output-dir",
             str(features),
+            "--positive-repeats",
+            str(settings["positive_repeats"]),
             "--negative-repeats",
             str(settings["negative_repeats"]),
             "--seed",

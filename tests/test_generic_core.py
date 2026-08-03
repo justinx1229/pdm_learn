@@ -109,6 +109,22 @@ class GenericCoreTests(unittest.TestCase):
         self.assertEqual(table.iloc[:, 0].tolist(), ["A", "B", "C"])
         self.assertFalse(table.iloc[:, 1:].isna().any().any())
 
+    def test_row_level_pdm_uses_identifier_in_automatic_log_smoothing_denominator(self) -> None:
+        datasets = {
+            "left": pd.DataFrame({"id": ["A"], "S1": [0.0], "S2": [1.0], "S3": [2.0]}),
+            "right": pd.DataFrame({"id": ["A"], "S1": [0.0], "S2": [1.0], "S3": [2.0]}),
+        }
+
+        table = build_features(
+            datasets,
+            specs=[DatasetSpec("left", normalize=None), DatasetSpec("right", normalize=None)],
+            pairs=[FeaturePair("left", "right")],
+            methods=("pdm",),
+            config=FeatureConfig(density_bins=1),
+        )["pdm"]
+
+        self.assertAlmostEqual(float(table.iloc[0, 1]), np.log(1.0 + 1.0 / 4.0))
+
     def test_generic_ranking_and_evaluation_accept_positive_labels(self) -> None:
         table = pd.DataFrame(
             {

@@ -502,7 +502,7 @@ def _build_density_table(
             if values.sum() > 0:
                 block.iloc[entity_index[entity]] = values.ravel()
         offset = (
-            1 / max(left.shape[1] - 1, 1)
+            1 / max(left.shape[1], 1)
             if config.log_offset in {None, "auto"}
             else float(config.log_offset)
         )

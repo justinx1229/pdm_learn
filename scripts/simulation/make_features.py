@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.integrate import cumulative_trapezoid
 from scipy.stats import pearsonr, spearmanr
 
 from pdm_learn.features import bicor, compute_mutual_information
@@ -14,6 +15,7 @@ from pdm_learn.simulation import (
     build_density_dataset,
     build_metric_dataset,
     collect_simulated_pairs,
+    standardize_pair,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,27 +27,48 @@ def parse_args() -> argparse.Namespace:
         "--output-dir", type=Path, default=PROJECT_ROOT / "runs" / "simulation" / "features"
     )
     parser.add_argument("--epsilon-std", type=float, default=3.0)
+    parser.add_argument(
+        "--positive-repeats",
+        type=int,
+        default=25,
+        help="Number of perturbed positive realizations per seed association.",
+    )
     parser.add_argument("--negative-repeats", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 
+def _arc_length_axis(
+    derivative,
+    start: float,
+    stop: float,
+    *,
+    count: int,
+) -> np.ndarray:
+    """Sample a curve's input axis at approximately equal arc-length intervals."""
+    grid = np.linspace(start, stop, max(10_000, count * 20))
+    speed = np.sqrt(1.0 + np.square(derivative(grid)))
+    arc_length = cumulative_trapezoid(speed, grid, initial=0.0)
+    targets = np.linspace(0.0, arc_length[-1], count)
+    return np.interp(targets, arc_length, grid)
+
+
 def build_positive_base() -> pd.DataFrame:
-    """Return paired linear, quadratic, sinusoidal, and constant signals."""
-    linear = np.linspace(-1, 1, 500)
-    quadratic = np.linspace(-1, 1, 500)
-    sinusoid = np.linspace(-np.pi, np.pi, 500)
-    constant = np.linspace(-1, 1, 500)
-    rows = [
-        linear,
-        linear,
-        quadratic,
-        quadratic**2,
-        sinusoid,
-        np.sin(sinusoid),
-        constant,
-        np.zeros_like(constant),
-    ]
+    """Return the standardized seed associations used by the original benchmark."""
+    linear = np.linspace(-1.0, 1.0, 500)
+    quadratic = _arc_length_axis(lambda values: 2.0 * values, -1.0, 1.0, count=500)
+    sinusoid = _arc_length_axis(np.cos, -np.pi, np.pi, count=500)
+    constant = np.linspace(0.0, 1.0, 251)
+    constant_x = np.append(constant, np.zeros_like(constant[1:-1]))
+    constant_y = np.append(np.zeros_like(constant), constant[1:-1])
+
+    pairs = (
+        (linear, linear),
+        (quadratic, quadratic**2),
+        (sinusoid, np.sin(sinusoid)),
+        (constant_x, constant_y),
+    )
+    rows = [values for x, y in pairs for values in standardize_pair(x, y)]
     return pd.DataFrame(rows)
 
 
@@ -78,18 +101,20 @@ def _scalar_features(
 
 def main() -> None:
     args = parse_args()
+    if args.positive_repeats < 1:
+        raise ValueError("positive_repeats must be a positive integer.")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     seed_pairs = build_positive_base()
     positive = collect_simulated_pairs(
         seed_pairs,
-        repeats=1,
+        repeats=args.positive_repeats,
         noise_scale=args.epsilon_std,
         centers=np.linspace(-2, 2, 7),
         rng=np.random.default_rng(args.seed),
     )
     negative = collect_simulated_pairs(
         seed_pairs,
-        repeats=args.negative_repeats,
+        repeats=args.positive_repeats * args.negative_repeats,
         noise_scale=args.epsilon_std,
         shuffle_y=True,
         centers=np.linspace(-2, 2, 7),
@@ -97,7 +122,10 @@ def main() -> None:
     )
     centers = np.linspace(-2, 2, 7)
 
-    collections = (("positive", positive, 1), ("negative", negative, args.negative_repeats))
+    collections = (
+        ("positive", positive, args.positive_repeats),
+        ("negative", negative, args.positive_repeats * args.negative_repeats),
+    )
     for label, pairs, repeats in collections:
         directory = args.output_dir / label
         directory.mkdir(exist_ok=True)

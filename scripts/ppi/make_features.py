@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pdm_learn.workflows.ppi import build_features, load_biogrid_pairs, load_inputs
+from pdm_learn.workflows.ppi import (
+    build_symmetric_density_features,
+    load_biogrid_pairs,
+    load_inputs,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,6 +46,11 @@ def input_overrides(args: argparse.Namespace) -> dict[str, Path]:
     }
 
 
+def build_symmetric_features(datasets, pairs):
+    """Compatibility wrapper for the PPI workflow's symmetric PDM builder."""
+    return build_symmetric_density_features(datasets, pairs, progress=True)
+
+
 def main() -> None:
     args = parse_args()
     biogrid_path = args.biogrid or args.data_dir / "clean_biogrid_interactions.csv"
@@ -49,7 +58,7 @@ def main() -> None:
 
     datasets = load_inputs(args.data_dir, input_paths=input_overrides(args))
     pairs = load_biogrid_pairs(biogrid_path)
-    features = build_features(datasets, pairs, methods=("pdm",), progress=True)["pdm"]
+    features = build_symmetric_features(datasets, pairs)
     output_path = args.output_dir / args.output_name
     features.to_csv(output_path, index=False)
     print(f"PPI feature table: {output_path}")

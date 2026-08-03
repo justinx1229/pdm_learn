@@ -10,7 +10,7 @@ from scipy.stats import ks_2samp
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -80,7 +80,7 @@ def _labeled_matrix(
     *,
     id_column: str | None,
     feature_columns: Sequence[object] | None,
-) -> tuple[str, np.ndarray, np.ndarray, np.ndarray, list[object]]:
+) -> tuple[str, np.ndarray, np.ndarray, np.ndarray, list[object], np.ndarray]:
     if not isinstance(feature_table, pd.DataFrame):
         raise TypeError("feature_table must be a pandas DataFrame.")
     identifier = _resolve_column(feature_table, id_column)
@@ -93,7 +93,7 @@ def _labeled_matrix(
     values = values[valid.to_numpy()]
     clean_ids = identifiers.loc[valid].astype(str).to_numpy()
     positive = np.isin(clean_ids, tuple(labels))
-    return str(identifier), clean_ids, values, positive, selected_columns
+    return str(identifier), clean_ids, values, positive, selected_columns, valid.to_numpy()
 
 
 def feature_ks_pvalues(positive: np.ndarray, negative: np.ndarray) -> np.ndarray:
@@ -168,13 +168,17 @@ def rank_candidates(
 ) -> pd.DataFrame:
     """Rank non-positive rows using repeated balanced positive/unlabeled fits.
 
-    The known-positive rows train the positive class. Each trial samples an
-    equally sized subset of the remaining rows as provisional negatives, then
-    averages predicted positive probabilities across all candidate rows.
+    The known-positive rows train the positive class. Each trial partitions
+    the remaining rows into held-out groups and fits a balanced provisional-
+    negative classifier for each group. Candidates are scored only by a fit
+    that held them out. The reported score is therefore an average of
+    out-of-bag probabilities, rather than an in-sample estimate for a row
+    temporarily treated as negative. ``score_trials`` records the number of
+    out-of-bag scores contributing to each candidate.
     """
     if isinstance(trials, bool) or not isinstance(trials, int) or trials < 1:
         raise ValueError("trials must be a positive integer.")
-    identifier, identifiers, values, positive_mask, _ = _labeled_matrix(
+    identifier, identifiers, values, positive_mask, _, _ = _labeled_matrix(
         feature_table,
         positive_labels,
         id_column=id_column,
@@ -182,33 +186,61 @@ def rank_candidates(
     )
     positive_values, candidate_values = values[positive_mask], values[~positive_mask]
     candidate_ids = identifiers[~positive_mask]
-    if not len(positive_values) or not len(candidate_values):
+    if not len(positive_values) or len(candidate_values) < 2:
         raise ValueError(
-            "Ranking requires at least one positive row and one unlabeled candidate row."
+            "Ranking requires at least one positive row and two unlabeled candidate rows."
         )
 
     rng = np.random.default_rng(random_state)
     scores = np.zeros(len(candidate_values), dtype=float)
-    sample_size = min(len(positive_values), len(candidate_values))
+    score_counts = np.zeros(len(candidate_values), dtype=int)
+    # Always leave at least one candidate out of a fit.  The prior
+    # implementation could sample every candidate when positives outnumbered
+    # candidates, leaving no unbiased candidate scores at all.
+    sample_size = min(len(positive_values), len(candidate_values) - 1)
+    held_out_per_fit = len(candidate_values) - sample_size
     for trial in tqdm(range(trials), desc="Candidate ranking", disable=not progress):
-        positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
-        negative_index = rng.choice(len(candidate_values), size=sample_size, replace=False)
-        train_positive = positive_values[positive_index]
-        train_negative = candidate_values[negative_index]
-        selected = (
-            select_features(train_positive, train_negative, n_features=n_features)
-            if feature_selection
-            else np.arange(values.shape[1])
-        )
-        train_values = np.vstack([train_positive[:, selected], train_negative[:, selected]])
-        train_labels = np.concatenate(
-            [np.ones(sample_size, dtype=int), np.zeros(sample_size, dtype=int)]
-        )
-        classifier = _build_classifier(model, random_state + trial).fit(train_values, train_labels)
-        scores += _positive_scores(classifier, candidate_values[:, selected])
-    scores /= trials
+        order = rng.permutation(len(candidate_values))
+        held_out_groups = [
+            order[start : start + held_out_per_fit]
+            for start in range(0, len(candidate_values), held_out_per_fit)
+        ]
+        for fold, held_out_index in enumerate(held_out_groups):
+            positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
+            available_negative_index = np.setdiff1d(
+                np.arange(len(candidate_values)), held_out_index, assume_unique=True
+            )
+            negative_index = rng.choice(
+                available_negative_index, size=sample_size, replace=False
+            )
+            train_positive = positive_values[positive_index]
+            train_negative = candidate_values[negative_index]
+            selected = (
+                select_features(train_positive, train_negative, n_features=n_features)
+                if feature_selection
+                else np.arange(values.shape[1])
+            )
+            train_values = np.vstack([train_positive[:, selected], train_negative[:, selected]])
+            train_labels = np.concatenate(
+                [np.ones(sample_size, dtype=int), np.zeros(sample_size, dtype=int)]
+            )
+            classifier = _build_classifier(
+                model, random_state + trial * len(held_out_groups) + fold
+            ).fit(train_values, train_labels)
+            scores[held_out_index] += _positive_scores(
+                classifier, candidate_values[held_out_index][:, selected]
+            )
+            score_counts[held_out_index] += 1
+    scores = np.divide(
+        scores,
+        score_counts,
+        out=np.full(len(candidate_values), np.nan, dtype=float),
+        where=score_counts > 0,
+    )
     return (
-        pd.DataFrame({identifier: candidate_ids, "score": scores})
+        pd.DataFrame(
+            {identifier: candidate_ids, "score": scores, "score_trials": score_counts}
+        )
         .sort_values("score", ascending=False, kind="stable")
         .reset_index(drop=True)
     )
@@ -227,8 +259,10 @@ def evaluate_labeled_features(
     feature_tables: Mapping[str, pd.DataFrame] | pd.DataFrame,
     positive_labels: Iterable[object],
     *,
+    negative_labels: Iterable[object] | None = None,
     id_column: str | None = None,
     feature_columns: Sequence[object] | Mapping[str, Sequence[object]] | None = None,
+    groups: Sequence[object] | Mapping[str, Sequence[object]] | None = None,
     model: str = "logistic_regression",
     n_splits: int = 5,
     feature_selection: bool = False,
@@ -237,11 +271,21 @@ def evaluate_labeled_features(
 ) -> pd.DataFrame:
     """Cross-validate one or more labeled feature tables.
 
-    Returns ROC AUC and average precision for each table. Non-numeric metadata
-    is ignored by default; pass ``feature_columns`` to select features
+    Returns ROC AUC and average precision for each table. When
+    ``negative_labels`` is supplied, evaluation uses only rows whose IDs are
+    explicitly positive or negative; otherwise every non-positive row is
+    treated as negative. ``groups`` enables stratified group cross-validation
+    and must provide one group value per input row. Non-numeric metadata is
+    ignored by default; pass ``feature_columns`` to select features
     explicitly, especially for pair-table data.
     """
     positive_label_set = _normalize_labels(positive_labels)
+    negative_label_set = (
+        None if negative_labels is None else _normalize_labels(negative_labels)
+    )
+    if negative_label_set is not None and positive_label_set & negative_label_set:
+        overlap = sorted(positive_label_set & negative_label_set)
+        raise ValueError(f"Positive and negative labels overlap: {overlap[:5]!r}.")
     tables = (
         {"features": feature_tables}
         if isinstance(feature_tables, pd.DataFrame)
@@ -252,12 +296,33 @@ def evaluate_labeled_features(
         selected_columns = (
             feature_columns.get(name) if isinstance(feature_columns, Mapping) else feature_columns
         )
-        _, _, values, positive_mask, used_columns = _labeled_matrix(
+        _, identifiers, values, positive_mask, used_columns, complete_rows = _labeled_matrix(
             table,
             positive_label_set,
             id_column=id_column,
             feature_columns=selected_columns,
         )
+        selected_groups = groups.get(name) if isinstance(groups, Mapping) else groups
+        group_values: np.ndarray | None = None
+        if selected_groups is not None:
+            if isinstance(selected_groups, (str, bytes)):
+                raise TypeError("groups must provide one value per feature-table row.")
+            group_values = np.asarray(tuple(selected_groups), dtype=object)
+            if group_values.ndim != 1 or len(group_values) != len(table):
+                raise ValueError(
+                    f"groups for {name!r} must contain exactly one value per feature-table row."
+                )
+            group_values = group_values[complete_rows]
+
+        if negative_label_set is not None:
+            negative_mask = np.isin(identifiers, tuple(negative_label_set))
+            labeled_mask = positive_mask | negative_mask
+            values = values[labeled_mask]
+            positive_mask = positive_mask[labeled_mask]
+            if group_values is not None:
+                group_values = group_values[labeled_mask]
+        if group_values is not None and pd.isna(group_values).any():
+            raise ValueError(f"groups for {name!r} must not contain missing values.")
         targets = positive_mask.astype(int)
         positives, negatives = int(targets.sum()), int((targets == 0).sum())
         row: dict[str, object] = {
@@ -265,16 +330,36 @@ def evaluate_labeled_features(
             "positive_rows": positives,
             "negative_rows": negatives,
             "feature_columns": len(used_columns),
+            "cv_strategy": (
+                "stratified_group_kfold" if group_values is not None else "stratified_kfold"
+            ),
             "roc_auc": np.nan,
             "average_precision": np.nan,
         }
         folds = min(n_splits, positives, negatives)
+        if group_values is not None:
+            positive_groups = np.unique(group_values[targets == 1])
+            negative_groups = np.unique(group_values[targets == 0])
+            folds = min(folds, len(positive_groups), len(negative_groups))
         if folds >= 2:
             scores = np.empty(len(values), dtype=float)
-            splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
-            for fold, (train_index, test_index) in enumerate(splitter.split(values, targets)):
+            splitter = (
+                StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=random_state)
+                if group_values is not None
+                else StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+            )
+            split_iterator = (
+                splitter.split(values, targets, group_values)
+                if group_values is not None
+                else splitter.split(values, targets)
+            )
+            for fold, (train_index, test_index) in enumerate(split_iterator):
                 train_values, test_values = values[train_index], values[test_index]
                 train_labels = targets[train_index]
+                if train_labels.min() == train_labels.max():
+                    raise ValueError(
+                        "Each cross-validation training fold must contain both classes."
+                    )
                 if feature_selection:
                     selected = select_features(
                         train_values[train_labels == 1],

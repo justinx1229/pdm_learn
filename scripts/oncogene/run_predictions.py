@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--features-left", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--label-file", type=Path, default=None, help="One-column label list.")
+    parser.add_argument(
+        "--negative-label-file",
+        type=Path,
+        default=None,
+        help="One-column file of explicit negative labels required for ROC AUC/AP benchmarking.",
+    )
     parser.add_argument("--label-name", default="oncogene", help="Prefix for output filenames.")
     parser.add_argument(
         "--positive-extra",
@@ -59,19 +65,35 @@ def _load_feature_tables(feature_dir: Path, density_name: str) -> dict[str, pd.D
     return tables
 
 
-def _ks_table(feature_table: pd.DataFrame, positive_labels: set[str]) -> pd.DataFrame:
+def _ks_table(
+    feature_table: pd.DataFrame,
+    positive_labels: set[str],
+    negative_labels: set[str] | None = None,
+) -> pd.DataFrame:
     identifier = feature_table.columns[0]
     values = feature_table.drop(columns=identifier).apply(pd.to_numeric, errors="coerce")
     complete = values.notna().all(axis=1)
     labels = feature_table.loc[complete, identifier].astype("string").str.strip()
     positive = labels.isin(positive_labels).to_numpy()
-    if not positive.any() or positive.all():
-        raise ValueError("PDM feature table needs both labelled and unlabelled complete rows.")
+    comparison = (
+        labels.isin(negative_labels).to_numpy()
+        if negative_labels is not None
+        else ~positive
+    )
+    if not positive.any() or not comparison.any():
+        raise ValueError(
+            "PDM feature table needs positive labels and a comparison set of complete rows."
+        )
     complete_values = values.loc[complete].to_numpy()
-    pvalues = feature_ks_pvalues(complete_values[positive], complete_values[~positive])
+    pvalues = feature_ks_pvalues(complete_values[positive], complete_values[comparison])
     return pd.DataFrame(
         {
             "feature": values.columns,
+            "comparison": (
+                "explicit_negative_controls"
+                if negative_labels is not None
+                else "unlabeled_candidates"
+            ),
             "ks_pvalue": pvalues,
             "log10_ks_pvalue": np.log10(np.clip(pvalues, 1e-300, None)),
         }
@@ -83,6 +105,11 @@ def main() -> None:
     args.results_dir.mkdir(parents=True, exist_ok=True)
     label_path = args.label_file or args.data_dir / "oncogene.txt"
     labels = load_label_set(label_path, header=None, labels=args.positive_extra)
+    negative_labels = (
+        load_label_set(args.negative_label_file, header=None)
+        if args.negative_label_file is not None
+        else None
+    )
     tables = _load_feature_tables(args.feature_dir, args.density_name)
 
     ranking = rank_candidates(
@@ -97,26 +124,32 @@ def main() -> None:
     ranking_path = args.results_dir / f"{args.label_name}_ranking.csv"
     ranking.to_csv(ranking_path, index=False)
 
-    benchmarks = []
-    for name, table in tables.items():
-        result = evaluate_labeled_features(
-            table,
-            labels,
-            model=args.model,
-            n_splits=args.n_splits,
-            feature_selection=name == "PDM",
-            n_features=args.features_left,
-            random_state=args.random_state,
-        )
-        result.loc[:, "method"] = name
-        benchmarks.append(result)
-    benchmark_path = args.results_dir / f"{args.label_name}_method_benchmarks.csv"
-    pd.concat(benchmarks, ignore_index=True).to_csv(benchmark_path, index=False)
+    benchmark_path = None
+    if negative_labels is not None:
+        benchmarks = []
+        for name, table in tables.items():
+            result = evaluate_labeled_features(
+                table,
+                labels,
+                negative_labels=negative_labels,
+                model=args.model,
+                n_splits=args.n_splits,
+                feature_selection=name == "PDM",
+                n_features=args.features_left,
+                random_state=args.random_state,
+            )
+            result.loc[:, "method"] = name
+            benchmarks.append(result)
+        benchmark_path = args.results_dir / f"{args.label_name}_method_benchmarks.csv"
+        pd.concat(benchmarks, ignore_index=True).to_csv(benchmark_path, index=False)
 
     pvalue_path = args.results_dir / f"{args.label_name}_ks_pvalues.csv"
-    _ks_table(tables["PDM"], labels).to_csv(pvalue_path, index=False)
+    _ks_table(tables["PDM"], labels, negative_labels).to_csv(pvalue_path, index=False)
     print(f"ranking: {ranking_path}")
-    print(f"benchmarks: {benchmark_path}")
+    if benchmark_path is None:
+        print("Skipping ROC AUC/AP: provide --negative-label-file with explicit negative labels.")
+    else:
+        print(f"benchmarks: {benchmark_path}")
     print(f"KS p-values: {pvalue_path}")
 
 
