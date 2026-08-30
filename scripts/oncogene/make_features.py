@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "runs" / "oncogene" / "features",
     )
-    parser.add_argument("--density-name", default="dataset_trimmed_v3.csv")
+    parser.add_argument("--density-name", default="dataset_trimmed_package.csv")
     parser.add_argument("--expression", type=Path, default=None)
     parser.add_argument("--copy-number", type=Path, default=None)
     parser.add_argument("--shrna", type=Path, default=None)
