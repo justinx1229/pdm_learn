@@ -255,6 +255,95 @@ def rank_unlabeled(
     return rank_candidates(feature_table, positive_labels, **kwargs)
 
 
+def loocv_rank_recovery(
+    feature_table: pd.DataFrame,
+    positive_labels: Iterable[object],
+    *,
+    id_column: str | None = None,
+    feature_columns: Sequence[object] | None = None,
+    model: str = "logistic_regression",
+    trials: int = 25,
+    feature_selection: bool = True,
+    n_features: int | None = None,
+    random_state: int = 42,
+    progress: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return a leave-one-positive-out rank-recovery curve and held-out ranks.
+
+    Each known positive is withheld from the positive-label set, ranked with
+    :func:`rank_candidates`, and compared with the unlabeled candidates.  The
+    returned curve uses the main-branch rank-recovery convention: a threshold
+    of zero means the held-out positive was ranked first.  Its ``area`` is the
+    normalized area under the cumulative recovery curve.
+
+    This is a positive-unlabeled ranking diagnostic.  It is not a substitute
+    for ROC AUC or average precision against confirmed negative controls.
+    """
+    identifier, identifiers, values, positive_mask, selected_columns, _ = _labeled_matrix(
+        feature_table,
+        positive_labels,
+        id_column=id_column,
+        feature_columns=feature_columns,
+    )
+    positive_ids = identifiers[positive_mask]
+    candidate_count = int((~positive_mask).sum())
+    if len(positive_ids) < 2:
+        raise ValueError("LOOCV rank recovery requires at least two positive rows.")
+    if candidate_count < 1:
+        raise ValueError("LOOCV rank recovery requires at least one unlabeled candidate row.")
+
+    clean_table = pd.DataFrame(values, columns=selected_columns)
+    clean_table.insert(0, identifier, identifiers)
+    positive_set = set(positive_ids.tolist())
+    held_out_rows: list[dict[str, object]] = []
+    for held_out_index, held_out_id in enumerate(
+        tqdm(positive_ids, desc="LOOCV positives", disable=not progress)
+    ):
+        training_labels = positive_set - {held_out_id}
+        ranking = rank_candidates(
+            clean_table,
+            training_labels,
+            id_column=identifier,
+            feature_columns=selected_columns,
+            model=model,
+            trials=trials,
+            feature_selection=feature_selection,
+            n_features=n_features,
+            random_state=random_state + held_out_index * trials,
+            progress=False,
+        )
+        rank_matches = np.flatnonzero(ranking[identifier].to_numpy() == held_out_id)
+        if len(rank_matches) != 1:
+            raise RuntimeError(f"Held-out positive {held_out_id!r} was not ranked exactly once.")
+        rank = int(rank_matches[0])
+        held_out_rows.append(
+            {
+                identifier: held_out_id,
+                "rank": rank,
+                "rank_fraction": rank / candidate_count,
+                "candidate_count": candidate_count,
+                "score": float(ranking.iloc[rank]["score"]),
+            }
+        )
+
+    held_out = pd.DataFrame(held_out_rows)
+    recovered = np.cumsum(
+        np.bincount(held_out["rank"].to_numpy(dtype=int), minlength=candidate_count + 1)
+    )
+    area = float(recovered.sum() / (len(held_out) * (candidate_count + 1)))
+    curve = pd.DataFrame(
+        {
+            "rank_threshold": np.arange(candidate_count + 1),
+            "recovered_positives": recovered,
+            "recovered_fraction": recovered / len(held_out),
+            "loocv_area": area,
+            "positive_rows": len(held_out),
+            "unlabeled_candidate_rows": candidate_count,
+        }
+    )
+    return curve, held_out
+
+
 def evaluate_labeled_features(
     feature_tables: Mapping[str, pd.DataFrame] | pd.DataFrame,
     positive_labels: Iterable[object],
@@ -382,6 +471,7 @@ __all__ = [
     "MODEL_NAMES",
     "evaluate_labeled_features",
     "feature_ks_pvalues",
+    "loocv_rank_recovery",
     "rank_candidates",
     "rank_unlabeled",
     "select_features",

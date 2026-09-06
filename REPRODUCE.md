@@ -63,6 +63,14 @@ runs/full/ppi/results/ppi_control_benchmarks.csv
 runs/full/simulation/results/simulation_benchmarks.csv
 ```
 
+Render the PDM KS statistics as a block heatmap with a shared color scale:
+
+```bash
+uv run python scripts/oncogene/make_ks_heatmap.py \
+  --ks-file runs/full/oncogene/results/oncogene_ks_pvalues.csv \
+  --output runs/full/oncogene/results/oncogene_ks_heatmap.png
+```
+
 The oncogene workflow is positive-unlabelled ranking. It deliberately does
 not report ROC AUC or average precision unless you provide a separate,
 explicit negative-label file to `scripts/oncogene/run_predictions.py`.

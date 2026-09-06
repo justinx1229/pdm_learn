@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pdm_learn.modeling import (
     evaluate_labeled_features,
     feature_ks_pvalues,
+    loocv_rank_recovery,
     rank_candidates,
     select_features,
 )
@@ -48,6 +49,20 @@ class ModelingTests(unittest.TestCase):
         ranking = rank_candidates(self.table, self.labels, trials=2, random_state=7)
 
         self.assertTrue((ranking["score_trials"] == 2).all())
+
+    def test_loocv_rank_recovery_returns_curve_and_each_held_out_positive(self) -> None:
+        curve, held_out = loocv_rank_recovery(
+            self.table,
+            self.labels,
+            model="logistic_regression",
+            trials=1,
+            random_state=7,
+        )
+
+        self.assertEqual(set(held_out["entity"]), self.labels)
+        self.assertEqual(curve["rank_threshold"].tolist(), [0, 1, 2, 3])
+        self.assertEqual(int(curve["recovered_positives"].iloc[-1]), len(self.labels))
+        self.assertTrue(curve["loocv_area"].between(0, 1).all())
 
     def test_evaluation_returns_cross_validated_scores(self) -> None:
         result = evaluate_labeled_features(
