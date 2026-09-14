@@ -36,6 +36,16 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(scores.shape, (len(self.negative),))
         self.assertTrue(np.isfinite(scores).all())
 
+    def test_core_predict_handles_balanced_positive_negative_sets(self) -> None:
+        scores = core_predict(
+            self.positive,
+            self.negative[: len(self.positive)],
+            3,
+            model="LR",
+        )
+        self.assertEqual(scores.shape, (len(self.positive),))
+        self.assertTrue(np.isfinite(scores).all())
+
     def test_loocv_returns_curve_when_requested(self) -> None:
         area, x_values, y_values = LOOCV(
             self.positive,
@@ -60,6 +70,18 @@ class ModelingTests(unittest.TestCase):
         self.assertLessEqual(area, 1.0)
         self.assertEqual(recall.ndim, 1)
         self.assertEqual(precision.ndim, 1)
+
+    def test_kfold_pr_accepts_progress_flag(self) -> None:
+        area, _, _ = KFold_PR(
+            self.positive,
+            self.negative,
+            3,
+            model="LR",
+            n_splits=3,
+            progress=True,
+        )
+        self.assertGreaterEqual(area, 0.0)
+        self.assertLessEqual(area, 1.0)
 
     def test_ks_pvalue_matches_feature_count(self) -> None:
         p_values = ks_pvalue(self.positive, self.negative)

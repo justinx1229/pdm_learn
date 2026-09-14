@@ -8,7 +8,7 @@ import pandas as pd
 from pdm_learn.ppi import evaluate_ppi_controls, load_cancer_complexes, rank_ppi_pairs_cancer
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,6 +37,7 @@ def main() -> None:
         model=args.model,
         ks_test=True,
         features_left=args.features_left,
+        progress=True,
     )
     ranking_path = results_dir / "ranked_PPI_pairs_cancer.csv"
     ranking.to_csv(ranking_path, index=False)
@@ -51,8 +52,9 @@ def main() -> None:
             benchmark = evaluate_ppi_controls(
                 positive_controls,
                 negative_controls,
-                model="XGB",
-                features_left=50,
+                model=args.model,
+                features_left=args.features_left,
+                progress=True,
             )
             benchmark_path = results_dir / "ppi_control_benchmarks.csv"
             benchmark.to_csv(benchmark_path, index=False)

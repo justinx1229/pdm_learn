@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--biogrid",
         type=Path,
-        default=Path("artifacts/results/clean_biogrid_interactions_pdm_combined.csv"),
+        default=Path("artifacts/results/clean_biogrid_interactions_pdm.csv"),
         help="Path to the Biogrid PDM csv",
     )
     parser.add_argument(

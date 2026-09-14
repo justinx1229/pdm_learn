@@ -5,5 +5,5 @@ Export plots, screenshots, and publication-ready figures here instead of leaving
 Regenerate scripted figures with:
 
 ```bash
-uv run python scripts/make_figures.py
+uv run python scripts/figures/make_figures.py
 ```

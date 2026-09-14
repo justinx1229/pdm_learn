@@ -13,6 +13,7 @@ from pdm_learn.ppi import (
     canonical_pair,
     cancer_complex_pair_set,
     derive_shared_trimmed_inputs,
+    load_ppi_inputs,
     parse_gene_list,
     sample_negative_control_pairs,
     sample_positive_control_pairs,
@@ -107,6 +108,20 @@ class PPITests(unittest.TestCase):
             mutation = pd.read_csv(paths["mutation"])
             self.assertEqual(mutation.iloc[:, 0].tolist(), ["A", "B"])
             self.assertEqual(mutation[["CL1", "CL2"]].values.tolist(), [[1.0, 0.0], [0.0, 1.0]])
+
+    def test_load_ppi_inputs_accepts_explicit_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = {}
+            for key in ("expression", "copy_number", "shrna", "mutation", "crispr"):
+                path = root / f"custom_{key}.csv"
+                pd.DataFrame({"gene name": ["A"], "CL1": [1.0]}).to_csv(path, index=False)
+                paths[key] = path
+
+            datasets = load_ppi_inputs(root, input_paths=paths)
+
+            self.assertEqual(set(datasets), {"gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR"})
+            self.assertEqual(datasets["CRISPR"].iloc[0, 0], "A")
 
 
 if __name__ == "__main__":
