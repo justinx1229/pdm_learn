@@ -181,9 +181,10 @@ def save_ks_heatmap(
 
     if image is None:
         raise RuntimeError("No KS blocks were plotted.")
-    colorbar = figure.colorbar(image, ax=[axis for row in axes for axis in row], shrink=0.75)
+    colorbar_axis = figure.add_axes([0.87, 0.16, 0.025, 0.68])
+    colorbar = figure.colorbar(image, cax=colorbar_axis)
     colorbar.set_label("log10 KS p-value", fontsize=13)
-    figure.suptitle(title, fontsize=18, fontweight="bold", y=0.98)
+    figure.suptitle(title, fontsize=18, fontweight="bold", y=1.08)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=300, bbox_inches="tight")
     if pdf_output_path is not None:

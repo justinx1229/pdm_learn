@@ -24,8 +24,8 @@ pip install pdm-learn
 
 The package is tested independently of the manuscript workflows.  For the
 reviewer-facing oncogene, PPI, and simulation analyses, see
-[REPRODUCE.md](REPRODUCE.md).  It documents the frozen input bundle, exact
-commands, expected outputs, and a small CI-friendly smoke profile.
+[REPRODUCE.md](REPRODUCE.md). It documents the input layout, commands,
+expected outputs, and a small example using the same pipeline as your own data.
 
 The command-line workflows are canonical.  The optional
 [reviewer walkthrough](notebooks/reviewer_walkthrough.ipynb) explains their
@@ -139,5 +139,5 @@ uv run pytest
 uv build
 ```
 
-For the reviewer-facing workflow and frozen-input manifest, see
+For the reviewer-facing workflow and input layout, see
 [REPRODUCE.md](REPRODUCE.md).

@@ -1,4 +1,4 @@
-"""Build reproducible PPI control feature tables from the frozen DepMap inputs."""
+"""Build reproducible PPI control feature tables from supplied DepMap inputs."""
 
 from __future__ import annotations
 

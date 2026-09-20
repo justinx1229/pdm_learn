@@ -1,18 +1,16 @@
-"""Run the reviewer-facing workflows with one frozen configuration."""
+"""Run oncogene, PPI, and simulation workflows with the supplied data and settings."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
+from time import perf_counter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "reproduction" / "workflows.json"
-MANIFEST_PATH = PROJECT_ROOT / "reproduction" / "input_manifest.json"
-SMOKE_DATA_DIR = PROJECT_ROOT / "tests" / "fixtures" / "reproduction"
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,69 +18,30 @@ def parse_args() -> argparse.Namespace:
         description="Run deterministic oncogene, PPI, and simulation reproduction workflows."
     )
     parser.add_argument(
-        "workflow", choices=("oncogene", "ppi", "simulation", "all", "verify-inputs")
+        "workflow", choices=("oncogene", "ppi", "simulation", "all")
     )
-    parser.add_argument("--profile", choices=("full", "smoke"), default="full")
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
-    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument(
-        "--skip-input-verification",
-        action="store_true",
-        help="Do not validate the full study-data bundle against reproduction/input_manifest.json.",
+        "--data-dir",
+        type=Path,
+        default=PROJECT_ROOT / "data",
+        help="Input directory for study, demo, or custom datasets. Defaults to data/.",
+    )
+    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "runs")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help="Workflow settings JSON. Defaults to reproduction/workflows.json.",
     )
     return parser.parse_args()
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def verify_inputs(data_dir: Path) -> None:
-    manifest = json.loads(MANIFEST_PATH.read_text())
-    missing = []
-    mismatches = []
-    for relative_path, expected in manifest["files"].items():
-        path = data_dir / relative_path
-        if not path.is_file():
-            missing.append(relative_path)
-        elif _sha256(path) != expected:
-            mismatches.append(relative_path)
-    if missing or mismatches:
-        details = []
-        if missing:
-            details.append(f"missing: {', '.join(missing)}")
-        if mismatches:
-            details.append(f"checksum mismatch: {', '.join(mismatches)}")
-        raise SystemExit("Study-data verification failed (" + "; ".join(details) + ").")
-    print(f"verified frozen study inputs: {data_dir}")
-
-
-def _run(command: list[str]) -> None:
-    print("+", " ".join(command))
+def _run(command: list[str], *, stage: str) -> None:
+    print(f"\n[{stage}] Starting", flush=True)
+    print("+", " ".join(command), flush=True)
+    started = perf_counter()
     subprocess.run(command, check=True)
-
-
-def _settings(profile: str) -> dict[str, dict[str, object]]:
-    settings = json.loads(CONFIG_PATH.read_text())
-    if profile == "smoke":
-        settings["oncogene"].update({"ranking_trials": 3, "n_splits": 2})
-        settings["ppi"].update(
-            {
-                "trials": 3,
-                "n_splits": 2,
-                "controls": 1,
-                "max_pairs_per_complex": 1,
-                "negative_pairs": 3,
-            }
-        )
-        settings["simulation"].update(
-            {"positive_repeats": 1, "negative_repeats": 3, "n_splits": 2}
-        )
-    return settings
+    print(f"[{stage}] Completed in {perf_counter() - started:.1f}s", flush=True)
 
 
 def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> None:
@@ -96,7 +55,8 @@ def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) 
             str(data_dir),
             "--output-dir",
             str(features),
-        ]
+        ],
+        stage="Oncogene 1/2: Building features",
     )
     _run(
         [
@@ -116,7 +76,8 @@ def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) 
             str(settings["n_splits"]),
             "--random-state",
             str(settings["random_state"]),
-        ]
+        ],
+        stage="Oncogene 2/2: Ranking genes and calculating KS statistics",
     )
 
 
@@ -135,12 +96,13 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
             str(biogrid),
             "--output-dir",
             str(features),
-        ]
+        ],
+        stage="PPI 1/3: Building pair features",
     )
     complex_name = (
-        "cancer_complexes.csv"
-        if (data_dir / "cancer_complexes.csv").exists()
-        else "cancer_complexes_clean.xlsx"
+        "cancer_complexes_clean.xlsx"
+        if (data_dir / "cancer_complexes_clean.xlsx").exists()
+        else "cancer_complexes.csv"
     )
     complexes = data_dir / complex_name
     _run(
@@ -163,7 +125,8 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
             str(biogrid),
             "--random-state",
             str(settings["random_state"]),
-        ]
+        ],
+        stage="PPI 2/3: Generating control sets",
     )
     _run(
         [
@@ -187,7 +150,8 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
             str(controls / "positive_controls.pkl"),
             "--negative-controls",
             str(controls / "negative_controls.pkl"),
-        ]
+        ],
+        stage="PPI 3/3: Ranking pairs and benchmarking controls",
     )
 
 
@@ -206,7 +170,8 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
             str(settings["negative_repeats"]),
             "--seed",
             str(settings["random_state"]),
-        ]
+        ],
+        stage="Simulation 1/2: Building features",
     )
     _run(
         [
@@ -222,29 +187,22 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
             str(settings["n_splits"]),
             "--random-state",
             str(settings["random_state"]),
-        ]
+        ],
+        stage="Simulation 2/2: Running benchmarks",
     )
 
 
 def main() -> None:
     args = parse_args()
-    if args.workflow == "verify-inputs":
-        verify_inputs(args.data_dir)
-        return
-
-    data_dir = SMOKE_DATA_DIR if args.profile == "smoke" else args.data_dir
-    if args.profile == "full" and not args.skip_input_verification:
-        verify_inputs(data_dir)
-    output_dir = args.output_dir or PROJECT_ROOT / "runs" / args.profile
-    settings = _settings(args.profile)
+    settings = json.loads(args.config.read_text())
     workflows = ("oncogene", "ppi", "simulation") if args.workflow == "all" else (args.workflow,)
     for workflow in workflows:
         if workflow == "oncogene":
-            run_oncogene(data_dir, output_dir, settings[workflow])
+            run_oncogene(args.data_dir, args.output_dir, settings[workflow])
         elif workflow == "ppi":
-            run_ppi(data_dir, output_dir, settings[workflow])
+            run_ppi(args.data_dir, args.output_dir, settings[workflow])
         else:
-            run_simulation(output_dir, settings[workflow])
+            run_simulation(args.output_dir, settings[workflow])
 
 
 if __name__ == "__main__":

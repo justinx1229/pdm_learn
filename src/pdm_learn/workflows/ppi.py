@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from ..datasets import load_matrices
 from ..pair_features import PairFeatureConfig, build_pair_features
@@ -223,7 +224,9 @@ def build_control_feature_tables(
     universe = control_gene_universe(datasets)
     positives: list[pd.DataFrame] = []
     negatives: list[pd.DataFrame] = []
-    for index in range(controls):
+    for index in tqdm(
+        range(controls), desc="PPI control sets completed", unit="set", disable=not progress
+    ):
         positive_pairs = sample_positive_control_pairs(
             cancer_complexes,
             gene_universe=universe,
@@ -238,10 +241,10 @@ def build_control_feature_tables(
             rng=np.random.default_rng(random_state + 10_000 + index),
         )
         positives.append(
-            build_symmetric_density_features(datasets, positive_pairs, progress=progress)
+            build_symmetric_density_features(datasets, positive_pairs, progress=False)
         )
         negatives.append(
-            build_symmetric_density_features(datasets, negative_pairs_table, progress=progress)
+            build_symmetric_density_features(datasets, negative_pairs_table, progress=False)
         )
     return positives, negatives
 

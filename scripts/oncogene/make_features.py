@@ -1,4 +1,4 @@
-"""Build oncogene PDM and association feature tables from frozen DepMap inputs."""
+"""Build oncogene PDM and association feature tables from supplied DepMap inputs."""
 
 from __future__ import annotations
 

@@ -1,9 +1,7 @@
-# Reproduce the reviewer workflows
+# Run the analysis workflows
 
-The command-line workflow is the canonical path.  It uses the locked Python
-environment, records every output below `runs/`, and fixes the models and
-random seeds in [`reproduction/workflows.json`](reproduction/workflows.json).
-The accompanying notebook is explanatory only.
+Use the same pipeline for study data, demos, subsets, and your own datasets.
+Choose the input directory, output directory, and optional workflow settings.
 
 ## Setup
 
@@ -12,14 +10,12 @@ uv sync --group dev --locked
 uv run pytest
 ```
 
-To execute the optional walkthrough notebook, also run:
+For the optional walkthrough notebook, also run
+`uv sync --group review --locked`.
 
-```bash
-uv sync --group review --locked
-```
+## Inputs
 
-The full oncogene and PPI workflows need the frozen study-data bundle.  Place
-its contents under a local directory with this layout:
+Oncogene and PPI workflows use this layout under `--data-dir`:
 
 ```text
 <data-dir>/
@@ -29,66 +25,71 @@ its contents under a local directory with this layout:
 │   ├── shRNA_Trimmed.csv
 │   ├── Gene_Mutation_Trimmed.csv
 │   └── CRISPR_Trimmed.csv
-├── oncogene.txt
-├── cancer_complexes_clean.xlsx
-└── clean_biogrid_interactions.csv
+├── oncogene.txt                  # Oncogene labels
+├── cancer_complexes_clean.xlsx   # PPI complexes; cancer_complexes.csv also works
+└── clean_biogrid_interactions.csv # PPI candidate pairs
 ```
 
-The exact SHA-256 checksums are in
-[`reproduction/input_manifest.json`](reproduction/input_manifest.json).  The
-study-data deposit is intentionally separate from the code repository because
-the local bundle is large.  Add its DOI or stable URL to that manifest before
-submission.
+Matrices contain a gene identifier column followed by sample columns. Supply
+only the files used by the workflow you run. If both complex tables are
+present, PPI uses the XLSX workbook. Simulation generates its own data.
+
+## Run
 
 ```bash
-uv run python scripts/reproduce.py verify-inputs --data-dir /path/to/study-data
+uv run python scripts/reproduce.py all --data-dir /path/to/data --output-dir runs/my-analysis
 ```
 
-## Full reproduction
+Replace `all` with `oncogene`, `ppi`, or `simulation` to run one workflow.
+Defaults are `data/` for inputs and `runs/` for outputs. Each stage reports its
+name, progress, and elapsed time.
+
+Settings come from [`reproduction/workflows.json`](reproduction/workflows.json).
+To change trial counts, folds, control counts, or simulation repeats, copy
+that file, edit the values, and supply `--config /path/to/settings.json`.
+For separate datasets, reuse the same command with a different `--data-dir`
+and `--output-dir`.
+
+The repository includes small sample datasets and reduced settings:
 
 ```bash
-uv run python scripts/reproduce.py oncogene --data-dir /path/to/study-data
-uv run python scripts/reproduce.py ppi --data-dir /path/to/study-data
-uv run python scripts/reproduce.py simulation --data-dir /path/to/study-data
+uv run python scripts/reproduce.py all \
+  --data-dir tests/fixtures/reproduction \
+  --config tests/fixtures/reproduction/workflows.json \
+  --output-dir runs/example
 ```
 
-Use `all` to run the three workflows in sequence.  Outputs are deterministic
-for the packaged dependency lock and configuration:
+Use those reduced settings with your own small dataset as well. They request
+three eligible negative PPI pairs and two folds; the default study settings
+request 5,000 negative pairs and five folds. Choose counts appropriate for
+your data. The sample run exercises the pipeline without reproducing study
+results.
+
+## Outputs
+
+Under your chosen output directory:
 
 ```text
-runs/full/oncogene/results/oncogene_ranking.csv
-runs/full/oncogene/results/oncogene_ks_pvalues.csv
-runs/full/ppi/results/ranked_PPI_pairs_cancer.csv
-runs/full/ppi/results/ppi_control_benchmarks.csv
-runs/full/simulation/results/simulation_benchmarks.csv
+oncogene/results/oncogene_ranking.csv
+oncogene/results/oncogene_ks_pvalues.csv
+ppi/results/ranked_PPI_pairs_cancer.csv
+ppi/results/ppi_control_benchmarks.csv
+simulation/results/simulation_benchmarks.csv
 ```
 
-Render the PDM KS statistics as a block heatmap with a shared color scale:
+Render the oncogene KS heatmap after running the pipeline:
 
 ```bash
 uv run python scripts/oncogene/make_ks_heatmap.py \
-  --ks-file runs/full/oncogene/results/oncogene_ks_pvalues.csv \
-  --output runs/full/oncogene/results/oncogene_ks_heatmap.png
+  --ks-file runs/my-analysis/oncogene/results/oncogene_ks_pvalues.csv \
+  --output runs/my-analysis/oncogene/results/oncogene_ks_heatmap.png
 ```
 
-The oncogene workflow is positive-unlabelled ranking. It deliberately does
-not report ROC AUC or average precision unless you provide a separate,
-explicit negative-label file to `scripts/oncogene/run_predictions.py`.
-PPI control results use held-out cancer-complex groups. Negative controls are
-sampled from the supplied BioGRID candidate-pair table after removing pairs in
-the curated complex catalogue; they are not claims of experimentally confirmed
-noninteraction.
+The oncogene workflow uses positive-unlabelled ranking. To generate
+`oncogene_method_benchmarks.csv`, run `scripts/oncogene/run_predictions.py`
+with a separate `--negative-label-file` containing explicit negative labels.
+PPI benchmarks hold out cancer-complex groups; their sampled negative pairs
+are exclusion-based controls, not confirmed noninteractions.
 
-## Fast verification
-
-The repository includes small synthetic matrices for a complete smoke run.
-This does not reproduce the manuscript numbers; it verifies that every stage
-works together without the study-data bundle.
-
-```bash
-uv run python scripts/reproduce.py all --profile smoke
-```
-
-The smoke run writes to `runs/smoke/` and is suitable for continuous
-integration.  Open `notebooks/reviewer_walkthrough.ipynb` after either run to
-inspect the generated tables.
+Open `notebooks/reviewer_walkthrough.ipynb` and set `RUN_DIR` to your output
+directory to inspect the results.
