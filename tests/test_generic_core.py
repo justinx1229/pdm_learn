@@ -141,7 +141,9 @@ class GenericCoreTests(unittest.TestCase):
 
         self.assertEqual(set(ranking["entity"]), {"D", "E", "F"})
         self.assertEqual(set(alias_ranking["entity"]), {"D", "E", "F"})
-        self.assertTrue(ranking["score"].between(0, 1).all())
+        self.assertTrue(ranking["score"].dropna().between(0, 1).all())
+        self.assertEqual(ranking["score_trials"].sum(), 2)
+        pd.testing.assert_frame_equal(ranking, alias_ranking)
         self.assertEqual(evaluation.loc[0, "positive_rows"], 3)
         self.assertEqual(evaluation.loc[0, "negative_rows"], 3)
         self.assertTrue(np.isfinite(evaluation.loc[0, "roc_auc"]))

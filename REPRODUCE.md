@@ -77,6 +77,15 @@ ppi/results/ppi_control_benchmarks.csv
 simulation/results/simulation_benchmarks.csv
 ```
 
+Ranking fits one model per trial using known positives and randomly sampled
+provisional negatives. Only candidates outside that training set are scored.
+`score` is the average of a candidate's predictions, and `score_trials` is
+the number contributing to that average. These are ranking scores, not
+calibrated probabilities of being an oncogene or an interacting pair.
+Short runs can leave candidates with `score_trials = 0` and a blank score;
+increase the trial count for more coverage. LOOCV rank recovery requires a
+score for every candidate and asks for more trials if coverage is incomplete.
+
 Render the oncogene KS heatmap after running the pipeline:
 
 ```bash

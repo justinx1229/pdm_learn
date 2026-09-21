@@ -168,13 +168,17 @@ def rank_candidates(
 ) -> pd.DataFrame:
     """Rank non-positive rows using repeated balanced positive/unlabeled fits.
 
-    The known-positive rows train the positive class. Each trial partitions
-    the remaining rows into held-out groups and fits a balanced provisional-
-    negative classifier for each group. Candidates are scored only by a fit
-    that held them out. The reported score is therefore an average of
-    out-of-bag probabilities, rather than an in-sample estimate for a row
-    temporarily treated as negative. ``score_trials`` records the number of
-    out-of-bag scores contributing to each candidate.
+    Each trial samples provisional negatives from the unlabeled candidates,
+    fits one balanced classifier, and scores only the remaining candidates.
+    Feature selection also uses only the sampled training rows. All positives
+    are used unless balancing requires subsampling them to leave at least one
+    candidate out of training.
+
+    ``score`` averages only the out-of-bag predictions for that candidate;
+    ``score_trials`` counts those predictions and may differ between rows.
+    Unscored candidates have a NaN score, a zero count, and sort last. Increase
+    trials for better coverage. Scores are ranking signals, not calibrated
+    probabilities of true positive status under positive/unlabeled sampling.
     """
     if isinstance(trials, bool) or not isinstance(trials, int) or trials < 1:
         raise ValueError("trials must be a positive integer.")
@@ -194,43 +198,29 @@ def rank_candidates(
     rng = np.random.default_rng(random_state)
     scores = np.zeros(len(candidate_values), dtype=float)
     score_counts = np.zeros(len(candidate_values), dtype=int)
-    # Always leave at least one candidate out of a fit.  The prior
-    # implementation could sample every candidate when positives outnumbered
-    # candidates, leaving no unbiased candidate scores at all.
+    # Keep training balanced while leaving at least one candidate to score.
     sample_size = min(len(positive_values), len(candidate_values) - 1)
-    held_out_per_fit = len(candidate_values) - sample_size
+    candidate_index = np.arange(len(candidate_values))
     for trial in tqdm(range(trials), desc="Candidate ranking", disable=not progress):
-        order = rng.permutation(len(candidate_values))
-        held_out_groups = [
-            order[start : start + held_out_per_fit]
-            for start in range(0, len(candidate_values), held_out_per_fit)
-        ]
-        for fold, held_out_index in enumerate(held_out_groups):
-            positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
-            available_negative_index = np.setdiff1d(
-                np.arange(len(candidate_values)), held_out_index, assume_unique=True
-            )
-            negative_index = rng.choice(
-                available_negative_index, size=sample_size, replace=False
-            )
-            train_positive = positive_values[positive_index]
-            train_negative = candidate_values[negative_index]
-            selected = (
-                select_features(train_positive, train_negative, n_features=n_features)
-                if feature_selection
-                else np.arange(values.shape[1])
-            )
-            train_values = np.vstack([train_positive[:, selected], train_negative[:, selected]])
-            train_labels = np.concatenate(
-                [np.ones(sample_size, dtype=int), np.zeros(sample_size, dtype=int)]
-            )
-            classifier = _build_classifier(
-                model, random_state + trial * len(held_out_groups) + fold
-            ).fit(train_values, train_labels)
-            scores[held_out_index] += _positive_scores(
-                classifier, candidate_values[held_out_index][:, selected]
-            )
-            score_counts[held_out_index] += 1
+        positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
+        negative_index = rng.choice(len(candidate_values), size=sample_size, replace=False)
+        held_out_index = np.setdiff1d(candidate_index, negative_index, assume_unique=True)
+        train_positive = positive_values[positive_index]
+        train_negative = candidate_values[negative_index]
+        selected = (
+            select_features(train_positive, train_negative, n_features=n_features)
+            if feature_selection
+            else np.arange(values.shape[1])
+        )
+        train_values = np.vstack([train_positive[:, selected], train_negative[:, selected]])
+        train_labels = np.concatenate(
+            [np.ones(sample_size, dtype=int), np.zeros(sample_size, dtype=int)]
+        )
+        classifier = _build_classifier(model, random_state + trial).fit(train_values, train_labels)
+        scores[held_out_index] += _positive_scores(
+            classifier, candidate_values[held_out_index][:, selected]
+        )
+        score_counts[held_out_index] += 1
     scores = np.divide(
         scores,
         score_counts,
@@ -241,7 +231,7 @@ def rank_candidates(
         pd.DataFrame(
             {identifier: candidate_ids, "score": scores, "score_trials": score_counts}
         )
-        .sort_values("score", ascending=False, kind="stable")
+        .sort_values("score", ascending=False, kind="stable", na_position="last")
         .reset_index(drop=True)
     )
 
@@ -278,6 +268,7 @@ def loocv_rank_recovery(
 
     This is a positive-unlabeled ranking diagnostic.  It is not a substitute
     for ROC AUC or average precision against confirmed negative controls.
+    Every candidate must receive a score; otherwise increase ``trials``.
     """
     identifier, identifiers, values, positive_mask, selected_columns, _ = _labeled_matrix(
         feature_table,
@@ -312,6 +303,10 @@ def loocv_rank_recovery(
             random_state=random_state + held_out_index * trials,
             progress=False,
         )
+        if (ranking["score_trials"] == 0).any():
+            raise ValueError(
+                "LOOCV rank recovery requires a score for every candidate. Increase trials."
+            )
         rank_matches = np.flatnonzero(ranking[identifier].to_numpy() == held_out_id)
         if len(rank_matches) != 1:
             raise RuntimeError(f"Held-out positive {held_out_id!r} was not ranked exactly once.")
