@@ -86,6 +86,15 @@ Short runs can leave candidates with `score_trials = 0` and a blank score;
 increase the trial count for more coverage. LOOCV rank recovery requires a
 score for every candidate and asks for more trials if coverage is incomplete.
 
+PPI ranking redraws up to 10 eligible positive pairs per complex in every
+trial. Set `ppi.ranking_max_pairs_per_complex` in the workflow JSON, or
+`--max-pairs-per-complex` when running `scripts/ppi/run_predictions.py`
+directly. The separate `ppi.max_pairs_per_complex` setting controls benchmark
+sampling. All known positives stay outside the provisional-negative pool,
+including positives not selected in a trial. Shared pairs count toward every
+complex they belong to and occur only once in training; overlaps can leave
+some complexes below the cap. The cap is a starting setting, not a tuned optimum.
+
 Render the oncogene KS heatmap after running the pipeline:
 
 ```bash
@@ -97,8 +106,13 @@ uv run python scripts/oncogene/make_ks_heatmap.py \
 The oncogene workflow uses positive-unlabelled ranking. To generate
 `oncogene_method_benchmarks.csv`, run `scripts/oncogene/run_predictions.py`
 with a separate `--negative-label-file` containing explicit negative labels.
-PPI benchmarks hold out cancer-complex groups; their sampled negative pairs
-are exclusion-based controls, not confirmed noninteractions.
+PPI benchmarks hold out cancer-complex groups, joining complexes that share
+curated positive pairs into one group to prevent overlap across folds.
+Their sampled negative pairs are exclusion-based controls, not confirmed
+noninteractions.
+These benchmarks evaluate a classifier on the supplied controls, not the
+candidate-ranking procedure or the benefit of its sampling cap. They also
+do not establish generalization to unseen proteins.
 
 Open `notebooks/reviewer_walkthrough.ipynb` and set `RUN_DIR` to your output
 directory to inspect the results.

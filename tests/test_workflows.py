@@ -161,6 +161,16 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(set(controls["canonical_pair"]), {"A.C", "C.D"})
 
+    def test_ppi_complex_groups_preserve_overlaps_and_merge_repeated_names(self) -> None:
+        complexes = pd.DataFrame({
+            ppi.COMPLEX_NAME_COLUMN: ["first", "second", " first "],
+            ppi.GENES_COLUMN: [["A", "B", "C", "A"], ["B", "C", "D"], ["X", "Y"]],
+        })
+        groups = ppi.cancer_complex_pair_groups(complexes)
+        self.assertEqual(groups["first"], {"A.B", "A.C", "B.C", "X.Y"})
+        self.assertEqual(groups["second"], {"B.C", "B.D", "C.D"})
+        self.assertEqual(set.union(*groups.values()), ppi.cancer_complex_pair_set(complexes))
+
 
 if __name__ == "__main__":
     unittest.main()

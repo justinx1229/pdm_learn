@@ -142,6 +142,8 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
             str(settings["model"]),
             "--trials",
             str(settings["trials"]),
+            "--max-pairs-per-complex",
+            str(settings.get("ranking_max_pairs_per_complex", 10)),
             "--n-splits",
             str(settings["n_splits"]),
             "--random-state",

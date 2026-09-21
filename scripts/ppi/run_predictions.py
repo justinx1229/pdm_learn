@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -11,7 +11,8 @@ import pandas as pd
 from pdm_learn.modeling import MODEL_NAMES, evaluate_labeled_features, rank_candidates
 from pdm_learn.workflows.ppi import (
     COMPLEX_NAME_COLUMN,
-    cancer_complex_pair_set,
+    cancer_complex_pair_groups,
+    canonical_pair,
     load_cancer_complexes,
     pdm_feature_columns,
 )
@@ -34,6 +35,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", choices=MODEL_NAMES, default="gradient_boosting")
     parser.add_argument("--trials", type=int, default=100)
+    parser.add_argument(
+        "--max-pairs-per-complex", type=int, default=10,
+        help="Maximum positive pairs per complex in each ranking trial (default: 10).",
+    )
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--features-left", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=42)
@@ -75,6 +80,42 @@ def _shared_numeric_features(positive: pd.DataFrame, negative: pd.DataFrame) -> 
     ]
 
 
+def _control_pair_ids(table: pd.DataFrame) -> pd.Series:
+    if {"Gene1", "Gene2"}.issubset(table.columns):
+        if table[["Gene1", "Gene2"]].isna().any().any():
+            raise ValueError("Control genes must not be missing.")
+        ids = pd.Series([
+            canonical_pair(left, right)
+            for left, right in zip(table["Gene1"], table["Gene2"], strict=True)
+        ])
+    elif "canonical_pair" in table.columns:
+        ids = table["canonical_pair"].astype("string").str.strip().reset_index(drop=True)
+    else:
+        raise ValueError("Controls must contain canonical_pair or Gene1/Gene2 identifiers.")
+    if ids.isna().any() or ids.eq("").any() or ids.duplicated().any():
+        raise ValueError("Control pair identifiers must be nonblank and unique within each class.")
+    return ids
+
+
+def _complex_holdout_groups(complex_pairs: Mapping[str, set[str]]) -> dict[str, str]:
+    """Keep complexes connected by shared positive pairs in the same fold."""
+    parents = {name: name for name in complex_pairs}
+
+    def root(name: str) -> str:
+        while parents[name] != name:
+            parents[name] = parents[parents[name]]
+            name = parents[name]
+        return name
+
+    owners: dict[str, str] = {}
+    for name, pairs in complex_pairs.items():
+        for pair in pairs:
+            owner = owners.setdefault(pair, name)
+            left, right = sorted((root(name), root(owner)))
+            parents[right] = left
+    return {name: root(name) for name in complex_pairs}
+
+
 def evaluate_control_sets(
     positive_controls: object,
     negative_controls: object,
@@ -83,6 +124,7 @@ def evaluate_control_sets(
     n_splits: int,
     n_features: int | None,
     random_state: int,
+    complex_pairs: Mapping[str, set[str]] | None = None,
 ) -> pd.DataFrame:
     """Evaluate only the supplied positive and negative control sets.
 
@@ -111,8 +153,22 @@ def evaluate_control_sets(
             raise ValueError(
                 f"Positive control set {control} contains missing or blank complex names."
             )
+        positive_pairs, negative_pairs = _control_pair_ids(positive), _control_pair_ids(negative)
+        catalogue = complex_pairs
+        if catalogue is None:
+            catalogue = {}
+            for name, pair in zip(complex_names, positive_pairs, strict=True):
+                catalogue.setdefault(name, set()).add(pair)
+        if any(
+            pair not in catalogue.get(name, set())
+            for name, pair in zip(complex_names, positive_pairs, strict=True)
+        ):
+            raise ValueError("Positive controls must belong to their named curated complex.")
+        if set(negative_pairs) & set().union(*catalogue.values()):
+            raise ValueError("Negative controls must not contain known positive pairs.")
+        holdout_groups = _complex_holdout_groups(catalogue)
         positive_groups = [
-            f"positive:{control}:{value}"
+            f"positive:{control}:{holdout_groups[value]}"
             for value in complex_names
         ]
         groups = [*positive_groups, *negative_ids]
@@ -144,13 +200,18 @@ def evaluate_control_sets(
 
 def main() -> None:
     args = parse_args()
+    if (args.positive_controls is None) != (args.negative_controls is None):
+        raise ValueError(
+            "Pass both --positive-controls and --negative-controls to run a benchmark."
+        )
     args.results_dir.mkdir(parents=True, exist_ok=True)
     features = pd.read_csv(args.features, low_memory=False)
     if "canonical_pair" not in features.columns:
         raise ValueError(
             "PPI features must contain the canonical_pair column from make_features.py."
         )
-    labels = cancer_complex_pair_set(load_cancer_complexes(args.complexes))
+    positive_groups = cancer_complex_pair_groups(load_cancer_complexes(args.complexes))
+    labels = set().union(*positive_groups.values())
     feature_columns = pdm_feature_columns(features)
     if not feature_columns:
         raise ValueError("PPI feature table does not contain generated PDM feature columns.")
@@ -163,6 +224,8 @@ def main() -> None:
         trials=args.trials,
         model=args.model,
         n_features=args.features_left,
+        positive_groups=positive_groups,
+        max_positive_per_group=args.max_pairs_per_complex,
         random_state=args.random_state,
         progress=True,
     )
@@ -170,10 +233,6 @@ def main() -> None:
     ranking.to_csv(ranking_path, index=False)
 
     print(f"PPI ranking: {ranking_path}")
-    if (args.positive_controls is None) != (args.negative_controls is None):
-        raise ValueError(
-            "Pass both --positive-controls and --negative-controls to run a benchmark."
-        )
     if args.positive_controls is None:
         print("Skipping PPI benchmark: positive and negative control sets were not supplied.")
         return
@@ -185,6 +244,7 @@ def main() -> None:
         n_splits=args.n_splits,
         n_features=args.features_left,
         random_state=args.random_state,
+        complex_pairs=positive_groups,
     )
     benchmark_path = args.results_dir / "ppi_control_benchmarks.csv"
     benchmark.to_csv(benchmark_path, index=False)

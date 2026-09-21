@@ -77,6 +77,19 @@ class ReproductionScriptTests(unittest.TestCase):
                 if "--complexes" in command:
                     complex_paths.append(command[command.index("--complexes") + 1])
             self.assertEqual(complex_paths, [str(workbook), str(workbook)])
+            command = run.call_args_list[-1].args[0]
+            self.assertEqual(command[command.index("--max-pairs-per-complex") + 1], "10")
+
+    def test_ppi_ranking_cap_is_independent_of_control_cap(self) -> None:
+        script = _reproduction_script()
+        settings = json.loads(TEST_CONFIG.read_text())["ppi"]
+        settings["ranking_max_pairs_per_complex"] = 2
+        settings["max_pairs_per_complex"] = 5
+        with patch.object(script, "_run") as run:
+            script.run_ppi(FIXTURE_DIR, Path("unused"), settings)
+        controls, ranking = [call.args[0] for call in run.call_args_list[1:]]
+        self.assertEqual(controls[controls.index("--max-pairs-per-complex") + 1], "5")
+        self.assertEqual(ranking[ranking.index("--max-pairs-per-complex") + 1], "2")
 
     def test_pipeline_runs_all_workflows_on_sample_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

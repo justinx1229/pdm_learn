@@ -118,6 +118,104 @@ class ModelingTests(unittest.TestCase):
         self.assertTrue(np.isfinite(ranking.iloc[0]["score"]))
         self.assertTrue(ranking.iloc[1:]["score"].isna().all())
 
+    def test_grouped_ranking_caps_overlaps_and_keeps_all_positives_out_of_negatives(self) -> None:
+        table = pd.DataFrame({"entity": [f"id{i}" for i in range(19)], "row": range(19)})
+        groups = {"large": range(6), "overlap": range(5, 8), "small": [8]}
+        labels = {f"id{i}" for i in range(9)}
+        predictions = {i: [] for i in range(9, 19)}
+        fits = []
+        test = self
+
+        def select_training_features(positive, negative, *, n_features):
+            test.assertTrue(set(positive[:, 0]).issubset(range(9)))
+            test.assertTrue(set(negative[:, 0]).issubset(predictions))
+            return np.array([0])
+
+        class RecordingClassifier:
+            classes_ = np.array([0, 1])
+
+            def fit(self, values, targets):
+                positive = set(values[targets == 1, 0])
+                negative = set(values[targets == 0, 0])
+                test.assertEqual(len(positive), len(negative))
+                test.assertEqual(len(values), len(positive) + len(negative))
+                for members in groups.values():
+                    test.assertLessEqual(len(positive.intersection(members)), 2)
+                test.assertIn(8, positive)
+                test.assertTrue(negative.issubset(predictions))
+                fits.append((positive, negative))
+                self.negative = negative
+                self.probability = (len(fits) % 7 + 1) / 10
+                return self
+
+            def predict_proba(self, values):
+                test.assertEqual(set(values[:, 0]), set(predictions) - self.negative)
+                for row in values[:, 0]:
+                    predictions[int(row)].append(self.probability)
+                return np.tile([1 - self.probability, self.probability], (len(values), 1))
+
+        kwargs = {
+            "positive_groups": {name: {f"id{i}" for i in members}
+                                for name, members in groups.items()},
+            "max_positive_per_group": 2, "trials": 30, "random_state": 7,
+        }
+        with (
+            patch(
+                "pdm_learn.modeling._build_classifier", side_effect=lambda *a: RecordingClassifier()
+            ),
+            patch("pdm_learn.modeling.select_features", side_effect=select_training_features),
+        ):
+            ranking = rank_candidates(table, labels, **kwargs)
+            first_fits = fits.copy()
+            for row in ranking.itertuples(index=False):
+                expected = predictions[int(row.entity[2:])]
+                self.assertEqual(row.score_trials, len(expected))
+                self.assertAlmostEqual(row.score, np.mean(expected))
+            fits.clear()
+            for scores in predictions.values():
+                scores.clear()
+            repeated = rank_candidates(table, labels, **kwargs)
+
+        self.assertEqual(fits, first_fits)
+        pd.testing.assert_frame_equal(ranking, repeated)
+        self.assertEqual(set(ranking["entity"]), {f"id{i}" for i in predictions})
+        self.assertGreater(len({frozenset(positive) for positive, _ in fits}), 1)
+        self.assertEqual(set.union(*(positive for positive, _ in fits)), set(range(9)))
+
+    def test_grouped_ranking_uses_only_complete_positives_and_leaves_candidates_to_score(self):
+        table = self.table.copy()
+        table.loc[0, "signal"] = np.nan
+        for source, eligible in ((table, {"B", "C"}), (self.table, self.labels)):
+            with self.subTest(eligible=eligible):
+                ranking = rank_candidates(
+                    source, self.labels,
+                    positive_groups={"complete": eligible, "absent": {"missing"}},
+                    max_positive_per_group=10, trials=30, random_state=7,
+                )
+                self.assertEqual(set(ranking["entity"]), {"D", "E", "F"})
+                self.assertTrue(ranking["score"].notna().all())
+                self.assertEqual(ranking["score_trials"].sum(), 30)
+
+    def test_grouped_ranking_validates_cap_and_coverage(self) -> None:
+        for cap in (0, -1, True, 1.5):
+            with self.subTest(cap=cap), self.assertRaisesRegex(ValueError, "positive integer"):
+                rank_candidates(
+                    self.table, self.labels,
+                    positive_groups={"complex": self.labels}, max_positive_per_group=cap,
+                )
+        with self.assertRaisesRegex(ValueError, "both"):
+            rank_candidates(self.table, self.labels, max_positive_per_group=2)
+        with self.assertRaisesRegex(ValueError, "Every eligible positive"):
+            rank_candidates(
+                self.table, self.labels,
+                positive_groups={"incomplete": {"A"}}, max_positive_per_group=2,
+            )
+
+    def test_ranking_rejects_duplicate_identifiers_before_fitting(self) -> None:
+        table = pd.concat([self.table, self.table.iloc[[-1]]], ignore_index=True)
+        with self.assertRaisesRegex(ValueError, "unique identifiers"):
+            rank_candidates(table, self.labels)
+
     def test_loocv_rank_recovery_returns_curve_and_each_held_out_positive(self) -> None:
         curve, held_out = loocv_rank_recovery(
             self.table,

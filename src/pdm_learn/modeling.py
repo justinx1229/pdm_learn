@@ -153,6 +153,38 @@ def _positive_scores(classifier, values: np.ndarray) -> np.ndarray:
     return probabilities[:, np.flatnonzero(classes == 1)[0]]
 
 
+def _positive_memberships(
+    positive_ids: np.ndarray,
+    groups: Mapping[object, Iterable[object]],
+) -> np.ndarray:
+    """Resolve group membership against complete, eligible positive rows only."""
+    memberships = np.zeros((len(positive_ids), len(groups)), dtype=bool)
+    for column, labels in enumerate(groups.values()):
+        label_set = {str(label).strip() for label in labels}
+        memberships[:, column] = np.isin(positive_ids, tuple(label_set))
+    if not memberships.any(axis=1).all():
+        raise ValueError("Every eligible positive must belong to a positive group.")
+    return memberships[:, memberships.any(axis=0)]
+
+
+def _sample_grouped_positives(
+    memberships: np.ndarray, cap: int, rng: np.random.Generator
+) -> np.ndarray:
+    """Sample fresh pairs with a strict cap in every group, including overlaps."""
+    counts = np.zeros(memberships.shape[1], dtype=int)
+    selected = np.zeros(len(memberships), dtype=bool)
+    # Randomize group order so overlapping groups have no fixed priority.
+    for group in rng.permutation(memberships.shape[1]):
+        for index in rng.permutation(np.flatnonzero(memberships[:, group])):
+            if counts[group] >= cap:
+                break
+            member_of = memberships[index]
+            if not selected[index] and (counts[member_of] < cap).all():
+                selected[index] = True
+                counts += member_of
+    return np.flatnonzero(selected)
+
+
 def rank_candidates(
     feature_table: pd.DataFrame,
     positive_labels: Iterable[object],
@@ -163,6 +195,8 @@ def rank_candidates(
     trials: int = 100,
     feature_selection: bool = True,
     n_features: int | None = None,
+    positive_groups: Mapping[object, Iterable[object]] | None = None,
+    max_positive_per_group: int | None = None,
     random_state: int = 42,
     progress: bool = False,
 ) -> pd.DataFrame:
@@ -170,9 +204,15 @@ def rank_candidates(
 
     Each trial samples provisional negatives from the unlabeled candidates,
     fits one balanced classifier, and scores only the remaining candidates.
-    Feature selection also uses only the sampled training rows. All positives
-    are used unless balancing requires subsampling them to leave at least one
-    candidate out of training.
+    Feature selection also uses only the sampled training rows. By default,
+    all positives are used unless balancing requires subsampling them to
+    leave at least one candidate out of training.
+
+    Supply both ``positive_groups`` (group name to positive IDs) and
+    ``max_positive_per_group`` to resample a capped positive set each trial.
+    Overlapping groups share a single row and all memberships count toward
+    the cap. Unselected positives never enter the unlabeled pool. This bounds
+    group influence; it does not guarantee equal representation of groups.
 
     ``score`` averages only the out-of-bag predictions for that candidate;
     ``score_trials`` counts those predictions and may differ between rows.
@@ -182,6 +222,14 @@ def rank_candidates(
     """
     if isinstance(trials, bool) or not isinstance(trials, int) or trials < 1:
         raise ValueError("trials must be a positive integer.")
+    if (positive_groups is None) != (max_positive_per_group is None):
+        raise ValueError("Supply both positive_groups and max_positive_per_group.")
+    if max_positive_per_group is not None and (
+        isinstance(max_positive_per_group, bool)
+        or not isinstance(max_positive_per_group, int)
+        or max_positive_per_group < 1
+    ):
+        raise ValueError("max_positive_per_group must be a positive integer.")
     identifier, identifiers, values, positive_mask, _, _ = _labeled_matrix(
         feature_table,
         positive_labels,
@@ -190,19 +238,31 @@ def rank_candidates(
     )
     positive_values, candidate_values = values[positive_mask], values[~positive_mask]
     candidate_ids = identifiers[~positive_mask]
+    if len(np.unique(identifiers)) != len(identifiers):
+        raise ValueError("Ranking requires unique identifiers to prevent train/score overlap.")
     if not len(positive_values) or len(candidate_values) < 2:
         raise ValueError(
             "Ranking requires at least one positive row and two unlabeled candidate rows."
         )
 
+    memberships = (
+        None if positive_groups is None
+        else _positive_memberships(identifiers[positive_mask], positive_groups)
+    )
     rng = np.random.default_rng(random_state)
     scores = np.zeros(len(candidate_values), dtype=float)
     score_counts = np.zeros(len(candidate_values), dtype=int)
     # Keep training balanced while leaving at least one candidate to score.
-    sample_size = min(len(positive_values), len(candidate_values) - 1)
     candidate_index = np.arange(len(candidate_values))
     for trial in tqdm(range(trials), desc="Candidate ranking", disable=not progress):
-        positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
+        if memberships is None:
+            sample_size = min(len(positive_values), len(candidate_values) - 1)
+            positive_index = rng.choice(len(positive_values), size=sample_size, replace=False)
+        else:
+            positive_index = _sample_grouped_positives(memberships, max_positive_per_group, rng)
+            sample_size = min(len(positive_index), len(candidate_values) - 1)
+            if sample_size < len(positive_index):
+                positive_index = rng.choice(positive_index, size=sample_size, replace=False)
         negative_index = rng.choice(len(candidate_values), size=sample_size, replace=False)
         held_out_index = np.setdiff1d(candidate_index, negative_index, assume_unique=True)
         train_positive = positive_values[positive_index]

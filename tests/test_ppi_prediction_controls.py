@@ -2,6 +2,7 @@ import sys
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -31,6 +32,7 @@ class PpiPredictionControlTests(unittest.TestCase):
             }
         )
         negative = positive.copy()
+        negative.loc[:, "Gene1"] = ["I", "J", "K", "L"]
         negative.loc[:, "Y"] = 0
         negative.loc[:, "Confidence_Score"] = [0.1, 0.2, 0.3, 0.4]
         negative.loc[:, "gene_exp.gene_mut.0"] = [0.1, 0.2, 0.3, 0.4]
@@ -74,3 +76,47 @@ class PpiPredictionControlTests(unittest.TestCase):
                 n_features=None,
                 random_state=7,
             )
+
+    def test_overlapping_complexes_are_held_out_together(self) -> None:
+        script = _prediction_script()
+        positive = pd.DataFrame({
+            "canonical_pair": ["A.B", "B.C", "D.E"],
+            "Complex Name": ["first", "second", "third"],
+            "gene_exp.gene_mut.0": [0.9, 0.8, 0.7],
+        })
+        negative = pd.DataFrame({
+            "canonical_pair": ["X.Y", "X.Z", "Y.Z"],
+            "gene_exp.gene_mut.0": [0.1, 0.2, 0.3],
+        })
+        # Shared catalogue pairs connect groups even when not sampled as controls.
+        catalogue = {"first": {"A.B", "A.C"}, "second": {"B.C", "A.C"}, "third": {"D.E"}}
+        with patch.object(
+            script, "evaluate_labeled_features", return_value=pd.DataFrame([{}])
+        ) as cv:
+            script.evaluate_control_sets(
+                positive, negative, complex_pairs=catalogue,
+                model="logistic_regression", n_splits=2, n_features=None, random_state=7,
+            )
+        groups = cv.call_args.kwargs["groups"]
+        self.assertEqual(groups[0], groups[1])
+        self.assertNotEqual(groups[0], groups[2])
+        self.assertEqual(len(set(groups[3:])), 3)
+
+        for invalid, message in (
+            (negative.assign(canonical_pair=["A.C", "X.Z", "Y.Z"]), "known positive"),
+            (negative.assign(canonical_pair=["X.Y", "X.Y", "Y.Z"]), "unique"),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                script.evaluate_control_sets(
+                    positive, invalid, complex_pairs=catalogue,
+                    model="logistic_regression", n_splits=2, n_features=None, random_state=7,
+                )
+
+    def test_transitive_holdout_groups_do_not_depend_on_catalogue_order(self) -> None:
+        script = _prediction_script()
+        catalogue = {"first": {"A.B"}, "second": {"B.C"}, "bridge": {"A.B", "B.C"}}
+        expected = dict.fromkeys(catalogue, "bridge")
+        self.assertEqual(script._complex_holdout_groups(catalogue), expected)
+        self.assertEqual(
+            script._complex_holdout_groups(dict(reversed(catalogue.items()))), expected
+        )

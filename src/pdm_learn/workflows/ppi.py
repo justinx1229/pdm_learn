@@ -100,6 +100,20 @@ def cancer_complex_pair_set(
     return pairs
 
 
+def cancer_complex_pair_groups(cancer_complexes: pd.DataFrame) -> dict[str, set[str]]:
+    """Map each complex name to all its unordered pairs, merging repeated names."""
+    groups: dict[str, set[str]] = {}
+    for _, row in cancer_complexes.iterrows():
+        name = row[COMPLEX_NAME_COLUMN]
+        if pd.isna(name) or not str(name).strip():
+            raise ValueError("Cancer complexes must have nonblank names.")
+        genes = dict.fromkeys(parse_gene_list(row[GENES_COLUMN]))
+        groups.setdefault(str(name).strip(), set()).update(
+            canonical_pair(left, right) for left, right in combinations(genes, 2)
+        )
+    return groups
+
+
 def control_gene_universe(datasets: Mapping[str, pd.DataFrame]) -> list[str]:
     """Return genes available in every assay used by the PPI feature recipe."""
     if not datasets:
@@ -381,6 +395,7 @@ __all__ = [
     "build_control_feature_tables",
     "build_symmetric_density_features",
     "cancer_complex_pair_set",
+    "cancer_complex_pair_groups",
     "canonical_pair",
     "control_gene_universe",
     "load_biogrid_pairs",
