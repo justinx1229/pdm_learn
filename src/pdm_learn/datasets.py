@@ -183,7 +183,7 @@ def prepare_matrix(dataframe: pd.DataFrame, spec: DatasetSpec) -> pd.DataFrame:
 
     Blank or duplicate entity identifiers are rejected because they make row
     alignment ambiguous.  Missing numeric values are retained for the feature
-    configuration to handle.
+    configuration to handle. Infinite numeric values are rejected before centering.
     """
     if not isinstance(spec, DatasetSpec):
         raise TypeError("spec must be a DatasetSpec.")
@@ -205,6 +205,8 @@ def prepare_matrix(dataframe: pd.DataFrame, spec: DatasetSpec) -> pd.DataFrame:
         )
 
     numeric = output.loc[:, sample_columns].apply(pd.to_numeric, errors="coerce")
+    if numeric.isin([float("inf"), float("-inf")]).any().any():
+        raise ValueError(f"Dataset {spec.name!r} contains infinite numeric values.")
     if spec.normalize == "row_center":
         numeric = numeric.sub(numeric.mean(axis=1), axis=0)
 

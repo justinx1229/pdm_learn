@@ -235,6 +235,40 @@ class ModelingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Increase trials"):
             loocv_rank_recovery(self.table, self.labels, trials=1, random_state=7)
 
+    def test_loocv_score_ties_are_independent_of_row_order(self) -> None:
+        def fixed_ranking(table, positive_labels, **kwargs):
+            return (
+                table.loc[~table["entity"].isin(positive_labels), ["entity", "score"]]
+                .assign(score_trials=1)
+                .sort_values("score", ascending=False, kind="stable")
+                .reset_index(drop=True)
+            )
+
+        cases = [
+            ([0.5] * 6, [4, 4], [0, 0, 0, 0, 2], 0.2),
+            ([0.5, 0.5, 0.9, 0.5, 0.1, 0.1], [2, 2], [0, 0, 2, 2, 2], 0.6),
+            ([0.9, 0.7, 0.8, 0.6, 0.4, 0.2], [0, 1], [1, 2, 2, 2, 2], 0.9),
+        ]
+        for scores, ranks, recovered, area in cases:
+            with self.subTest(scores=scores):
+                table = pd.DataFrame({"entity": list("ABCDEF"), "score": scores})
+                with patch("pdm_learn.modeling.rank_candidates", side_effect=fixed_ranking):
+                    curve, held_out = loocv_rank_recovery(table, {"A", "B"})
+                    reordered_curve, reordered_ranks = loocv_rank_recovery(
+                        table.iloc[::-1], {"A", "B"}
+                    )
+                self.assertEqual(held_out["rank"].tolist(), ranks)
+                self.assertEqual(held_out["score"].tolist(), scores[:2])
+                np.testing.assert_allclose(held_out["rank_fraction"], np.array(ranks) / 4)
+                self.assertEqual(curve["recovered_positives"].tolist(), recovered)
+                np.testing.assert_allclose(curve["recovered_fraction"], np.array(recovered) / 2)
+                np.testing.assert_allclose(curve["loocv_area"], area)
+                pd.testing.assert_frame_equal(curve, reordered_curve)
+                pd.testing.assert_frame_equal(
+                    held_out.sort_values("entity").reset_index(drop=True),
+                    reordered_ranks.sort_values("entity").reset_index(drop=True),
+                )
+
     def test_evaluation_returns_cross_validated_scores(self) -> None:
         result = evaluate_labeled_features(
             {"first": self.table, "second": self.table},
@@ -260,6 +294,47 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(result["negative_rows"].tolist(), [3])
         self.assertEqual(result["cv_strategy"].tolist(), ["stratified_group_kfold"])
         self.assertTrue(np.isfinite(result["roc_auc"]).all())
+
+    def test_evaluation_rejects_duplicates_without_consistent_groups(self) -> None:
+        for duplicate_id in ("F", " F "):
+            table = pd.concat(
+                [self.table, self.table.iloc[[-1]].assign(entity=duplicate_id)], ignore_index=True
+            )
+            for groups in (None, ["A", "B", "C", "D", "E", "F", "other"]):
+                with self.subTest(duplicate_id=duplicate_id, groups=groups):
+                    with self.assertRaisesRegex(ValueError, "duplicate entity identifiers"):
+                        evaluate_labeled_features(table, self.labels, groups=groups, n_splits=3)
+
+    def test_evaluation_accepts_duplicates_in_the_same_group(self) -> None:
+        table = pd.concat(
+            [self.table, self.table.assign(entity=" " + self.table["entity"] + " ")],
+            ignore_index=True,
+        )
+        result = evaluate_labeled_features(
+            table, self.labels, groups=list("ABCDEF") * 2, n_splits=3,
+        )
+        self.assertEqual(result.loc[0, "positive_rows"], 6)
+        self.assertEqual(result.loc[0, "negative_rows"], 6)
+        self.assertEqual(result.loc[0, "cv_strategy"], "stratified_group_kfold")
+        self.assertTrue(np.isfinite(result.loc[0, "roc_auc"]))
+
+    def test_evaluation_ignores_duplicates_in_filtered_rows(self) -> None:
+        excluded = self.table.iloc[[-1, -1, -1]].copy()
+        excluded["entity"] = ["F", "X", " X "]
+        excluded.iloc[0, excluded.columns.get_loc("signal")] = np.nan
+        table = pd.concat([self.table, excluded], ignore_index=True)
+        for groups in (None, list("ABCDEF")):
+            with self.subTest(groups=groups):
+                expected = evaluate_labeled_features(
+                    self.table, self.labels, negative_labels={"D", "E", "F"},
+                    groups=groups, n_splits=3,
+                )
+                actual = evaluate_labeled_features(
+                    table, self.labels, negative_labels={"D", "E", "F"},
+                    groups=None if groups is None else groups + ["other1", "other2", "other3"],
+                    n_splits=3,
+                )
+                pd.testing.assert_frame_equal(actual, expected)
 
 
 if __name__ == "__main__":

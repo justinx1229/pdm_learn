@@ -140,12 +140,17 @@ def _save_loocv_plot(curves: pd.DataFrame, output_path: Path) -> None:
     figure, axis = plt.subplots(figsize=(7.5, 5))
     for method, curve in curves.groupby("method", sort=False):
         area = float(curve["loocv_area"].iloc[0])
+        candidates = int(curve["unlabeled_candidate_rows"].iloc[0])
+        positives = int(curve["positive_rows"].iloc[0])
         axis.step(
             curve["rank_threshold"],
             curve["recovered_fraction"],
             where="post",
             linewidth=2,
-            label=f"{method} (area = {area:.3f})",
+            label=(
+                f"{method} (area = {area:.3f})\n"
+                f"{candidates:,} unlabeled candidates, {positives:,} positives"
+            ),
         )
     axis.set_xlabel("Rank threshold (lower is better)")
     axis.set_ylabel("Fraction of held-out positives recovered")

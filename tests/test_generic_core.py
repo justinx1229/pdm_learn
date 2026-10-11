@@ -13,7 +13,9 @@ from pdm_learn import (
     DatasetSpec,
     FeatureConfig,
     FeaturePair,
+    bicor,
     build_features,
+    build_pair_features,
     evaluate_labeled_features,
     rank_candidates,
     rank_unlabeled,
@@ -21,6 +23,45 @@ from pdm_learn import (
 
 
 class GenericCoreTests(unittest.TestCase):
+    def test_feature_builders_reject_infinite_matrix_values(self) -> None:
+        datasets = {
+            "left": pd.DataFrame({"id": ["A"], "S1": [np.inf], "S2": [np.inf]}),
+            "right": pd.DataFrame({"id": ["A"], "S1": [1.0], "S2": [2.0]}),
+        }
+        specs = [DatasetSpec(name, normalize=None) for name in datasets]
+        with self.assertRaisesRegex(ValueError, "infinite numeric values"):
+            build_features(datasets, specs=specs, methods=("pdm",))
+        with self.assertRaisesRegex(ValueError, "infinite numeric values"):
+            build_pair_features(
+                datasets, pd.DataFrame({"source": ["A"], "target": ["A"]}),
+                left_id_column="source", right_id_column="target",
+                specs=specs, pairs=[FeaturePair("left", "right")], methods=("pdm",),
+            )
+
+    def test_bicor_zero_mad_uses_pearson(self) -> None:
+        binary = [0, 0, 0, 0, 1]
+        for other, expected in [
+            (binary, 1.0),
+            ([1, 1, 1, 1, 0], -1.0),
+            ([0, 1, 2, 3, 4], 1 / np.sqrt(2)),
+        ]:
+            with self.subTest(other=other):
+                self.assertAlmostEqual(bicor(binary, other), expected)
+                self.assertAlmostEqual(bicor(other, binary), expected)
+
+    def test_bicor_constant_inputs_are_missing(self) -> None:
+        constant = [1, 1, 1, 1, 1]
+        for other in [constant, [0, 0, 0, 0, 1], [0, 1, 2, 3, 4]]:
+            with self.subTest(other=other):
+                self.assertTrue(np.isnan(bicor(constant, other)))
+                self.assertTrue(np.isnan(bicor(other, constant)))
+
+    def test_bicor_preserves_continuous_result(self) -> None:
+        self.assertAlmostEqual(
+            bicor([0.2, 1.1, 2.5, 4.0, 7.3], [1.4, 0.5, 3.2, 2.8, 6.1]),
+            0.9044172661656357,
+        )
+
     def test_mixed_dataset_kinds_and_custom_pair_list(self) -> None:
         datasets = {
             "score": pd.DataFrame(

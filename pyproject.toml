@@ -56,6 +56,11 @@ exclude = [
     "/figures/",
     "/notebooks/",
     "/scripts/",
+    "/tests/test_oncogene_ks_heatmap.py",
+    "/tests/test_ppi_prediction_controls.py",
+    "/tests/test_reproduction_scripts.py",
+    "/tests/test_simulation.py",
+    "/tests/test_workflows.py",
 ]
 
 [tool.hatch.build.targets.wheel]

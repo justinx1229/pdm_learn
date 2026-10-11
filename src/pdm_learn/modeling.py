@@ -324,7 +324,9 @@ def loocv_rank_recovery(
     :func:`rank_candidates`, and compared with the unlabeled candidates.  The
     returned curve uses the main-branch rank-recovery convention: a threshold
     of zero means the held-out positive was ranked first.  Its ``area`` is the
-    normalized area under the cumulative recovery curve.
+    normalized area under the cumulative recovery curve. Tied scores share
+    the worst (largest) zero-based rank in their tie, so a tied group is
+    recovered only when the threshold includes the entire group.
 
     This is a positive-unlabeled ranking diagnostic.  It is not a substitute
     for ROC AUC or average precision against confirmed negative controls.
@@ -370,14 +372,15 @@ def loocv_rank_recovery(
         rank_matches = np.flatnonzero(ranking[identifier].to_numpy() == held_out_id)
         if len(rank_matches) != 1:
             raise RuntimeError(f"Held-out positive {held_out_id!r} was not ranked exactly once.")
-        rank = int(rank_matches[0])
+        score = float(ranking.iloc[rank_matches[0]]["score"])
+        rank = int((ranking["score"] >= score).sum()) - 1
         held_out_rows.append(
             {
                 identifier: held_out_id,
                 "rank": rank,
                 "rank_fraction": rank / candidate_count,
                 "candidate_count": candidate_count,
-                "score": float(ranking.iloc[rank]["score"]),
+                "score": score,
             }
         )
 
@@ -421,7 +424,8 @@ def evaluate_labeled_features(
     treated as negative. ``groups`` enables stratified group cross-validation
     and must provide one group value per input row. Non-numeric metadata is
     ignored by default; pass ``feature_columns`` to select features
-    explicitly, especially for pair-table data.
+    explicitly, especially for pair-table data. After feature and label
+    filtering, duplicate normalized IDs require a single shared group per ID.
     """
     positive_label_set = _normalize_labels(positive_labels)
     negative_label_set = (
@@ -461,12 +465,19 @@ def evaluate_labeled_features(
         if negative_label_set is not None:
             negative_mask = np.isin(identifiers, tuple(negative_label_set))
             labeled_mask = positive_mask | negative_mask
+            identifiers = identifiers[labeled_mask]
             values = values[labeled_mask]
             positive_mask = positive_mask[labeled_mask]
             if group_values is not None:
                 group_values = group_values[labeled_mask]
         if group_values is not None and pd.isna(group_values).any():
             raise ValueError(f"groups for {name!r} must not contain missing values.")
+        if pd.Index(identifiers).has_duplicates:
+            if group_values is None:
+                raise ValueError("Evaluation with duplicate entity identifiers requires groups.")
+            groups_per_id = pd.Series(group_values, index=identifiers).groupby(level=0).nunique()
+            if (groups_per_id > 1).any():
+                raise ValueError("Each set of duplicate entity identifiers must share one group.")
         targets = positive_mask.astype(int)
         positives, negatives = int(targets.sum()), int((targets == 0).sum())
         row: dict[str, object] = {

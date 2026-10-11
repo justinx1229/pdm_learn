@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=0.0)
     parser.add_argument("--cmap", default="gist_heat_r")
-    parser.add_argument("--title", default="Oncogene PDM feature enrichment")
+    parser.add_argument("--title", default="Oncogene PDM feature differences")
     return parser.parse_args()
 
 
@@ -111,7 +111,7 @@ def save_ks_heatmap(
     vmin: float | None = None,
     vmax: float = 0.0,
     cmap: str = "gist_heat_r",
-    title: str = "Oncogene PDM feature enrichment",
+    title: str = "Oncogene PDM feature differences",
     pdf_output_path: Path | None = None,
 ) -> None:
     """Write a shared-scale PDM KS block heatmap as PNG and optional PDF."""

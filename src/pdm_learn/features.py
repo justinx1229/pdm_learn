@@ -130,12 +130,13 @@ def density_map(
             raise ValueError("Discrete observations must match a declared density center.")
         return indices
 
-    def normalized(weights: np.ndarray) -> np.ndarray:
+    def normalized(squared_distances: np.ndarray) -> np.ndarray:
+        weights = np.exp(-0.5 * inverse_sigma_squared * squared_distances)
         total = float(weights.sum())
         if total > 0 and np.isfinite(total):
             return weights / total
         fallback = np.zeros_like(weights, dtype=float)
-        fallback.flat[np.argmax(weights)] = 1.0
+        fallback.flat[np.argmin(squared_distances)] = 1.0
         return fallback
 
     x_indices = indices_for(x_values, x_axis) if x_discrete else None
@@ -145,18 +146,13 @@ def density_map(
         if x_discrete and y_discrete:
             output[y_indices[index], x_indices[index]] += 1.0
         elif x_discrete:
-            weights = np.exp(-0.5 * inverse_sigma_squared * (y_value - y_axis) ** 2)
-            output[:, x_indices[index]] += normalized(weights)
+            output[:, x_indices[index]] += normalized((y_value - y_axis) ** 2)
         elif y_discrete:
-            weights = np.exp(-0.5 * inverse_sigma_squared * (x_value - x_axis) ** 2)
-            output[y_indices[index], :] += normalized(weights)
+            output[y_indices[index], :] += normalized((x_value - x_axis) ** 2)
         else:
-            weights = np.exp(
-                -0.5
-                * inverse_sigma_squared
-                * ((x_value - x_axis[np.newaxis, :]) ** 2 + (y_value - y_axis[:, np.newaxis]) ** 2)
+            output += normalized(
+                (x_value - x_axis[np.newaxis, :]) ** 2 + (y_value - y_axis[:, np.newaxis]) ** 2
             )
-            output += normalized(weights)
     return output / len(x_values)
 
 
@@ -390,13 +386,22 @@ def bicor(
     tuning_constant: float = 9.0,
     epsilon: float = 1e-9,
 ) -> float:
-    """Return the biweight midcorrelation of two numeric vectors."""
+    """Return biweight midcorrelation, or NaN if either vector is constant.
+
+    Use Pearson correlation if either nonconstant vector has zero median
+    absolute deviation.
+    """
     x_values, y_values = drop_missing_observations(x, y)
     if len(x_values) < 3:
         return float("nan")
     x_median, y_median = np.median(x_values), np.median(y_values)
-    x_mad = max(float(np.median(np.abs(x_values - x_median))), epsilon)
-    y_mad = max(float(np.median(np.abs(y_values - y_median))), epsilon)
+    if np.all(x_values == x_values[0]) or np.all(y_values == y_values[0]):
+        return float("nan")
+    x_mad = float(np.median(np.abs(x_values - x_median)))
+    y_mad = float(np.median(np.abs(y_values - y_median)))
+    if x_mad == 0 or y_mad == 0:
+        return float(stats.pearsonr(x_values, y_values).statistic)
+    x_mad, y_mad = max(x_mad, epsilon), max(y_mad, epsilon)
     x_u = (x_values - x_median) / (tuning_constant * x_mad)
     y_u = (y_values - y_median) / (tuning_constant * y_mad)
     x_weights = np.where(np.abs(x_u) < 1, (1 - x_u**2) ** 2, 0.0)

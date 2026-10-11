@@ -18,6 +18,17 @@ from pdm_learn.labels import balance_labeled_rows, load_label_set, split_labeled
 
 
 class DatasetUtilitiesTests(unittest.TestCase):
+    def test_prepare_matrix_rejects_infinities_before_normalization(self) -> None:
+        for normalize in (None, "row_center"):
+            for values in (
+                [1, float("inf")], [float("-inf"), 2],
+                [float("inf"), float("inf")], [float("-inf"), float("-inf")],
+            ):
+                with self.subTest(normalize=normalize, values=values):
+                    raw = pd.DataFrame([["A", *values]], columns=["id", "S1", "S2"])
+                    with self.assertRaisesRegex(ValueError, "infinite numeric values"):
+                        prepare_matrix(raw, DatasetSpec("measurements", normalize=normalize))
+
     def test_prepare_matrix_uses_named_identifier_and_row_centers_values(self) -> None:
         raw = pd.DataFrame(
             {
