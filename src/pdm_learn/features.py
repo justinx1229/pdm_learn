@@ -401,13 +401,15 @@ def bicor(
     y_mad = float(np.median(np.abs(y_values - y_median)))
     if x_mad == 0 or y_mad == 0:
         return float(stats.pearsonr(x_values, y_values).statistic)
-    x_mad, y_mad = max(x_mad, epsilon), max(y_mad, epsilon)
-    x_u = (x_values - x_median) / (tuning_constant * x_mad)
-    y_u = (y_values - y_median) / (tuning_constant * y_mad)
+    # Normalize deviations so the denominator guard is independent of input units.
+    x_deviation = (x_values - x_median) / x_mad
+    y_deviation = (y_values - y_median) / y_mad
+    x_u = x_deviation / tuning_constant
+    y_u = y_deviation / tuning_constant
     x_weights = np.where(np.abs(x_u) < 1, (1 - x_u**2) ** 2, 0.0)
     y_weights = np.where(np.abs(y_u) < 1, (1 - y_u**2) ** 2, 0.0)
-    x_weighted = (x_values - x_median) * x_weights
-    y_weighted = (y_values - y_median) * y_weights
+    x_weighted = x_deviation * x_weights
+    y_weighted = y_deviation * y_weights
     denominator = max(float(np.sqrt(np.sum(x_weighted**2) * np.sum(y_weighted**2))), epsilon)
     return float(np.sum(x_weighted * y_weighted) / denominator)
 

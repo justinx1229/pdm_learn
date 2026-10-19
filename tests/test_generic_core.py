@@ -62,6 +62,16 @@ class GenericCoreTests(unittest.TestCase):
             0.9044172661656357,
         )
 
+    def test_bicor_is_invariant_to_rescaling(self) -> None:
+        x = np.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+        y = np.array([-2.0, 1.0, 0.0, 1.0, 3.0])
+        expected = bicor(x, y)
+        for x_scale, y_scale in [(1e-6, 1e-6), (1e-12, 1), (1, 1e-12), (1e12, 1e-12)]:
+            with self.subTest(x_scale=x_scale, y_scale=y_scale):
+                self.assertAlmostEqual(bicor(x * x_scale, x * y_scale), 1.0)
+                self.assertAlmostEqual(bicor(x * x_scale, -x * y_scale), -1.0)
+                self.assertAlmostEqual(bicor(x * x_scale, y * y_scale), expected)
+
     def test_mixed_dataset_kinds_and_custom_pair_list(self) -> None:
         datasets = {
             "score": pd.DataFrame(
