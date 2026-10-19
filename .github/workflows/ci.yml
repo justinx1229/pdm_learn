@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev --locked
+      - run: uv run ruff check src tests
+      - run: uv run pytest
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - run: uv build
+      - name: Check source distribution contents
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+
+          archive = next(Path("dist").glob("*.tar.gz"))
+          blocked = (".uv-cache", ".venv", "archive", "artifacts", "data", "dist", "notebooks")
+          with tarfile.open(archive) as source:
+              names = source.getnames()
+          assert not any(any(f"/{part}/" in f"/{name}" for part in blocked) for name in names), names
+          PY
+      - name: Install wheel in a fresh environment
+        run: |
+          uv venv --clear .package-test
+          uv pip install --python .package-test/bin/python dist/*.whl
+          .package-test/bin/python -c "import pdm_learn; print(pdm_learn.__version__)"

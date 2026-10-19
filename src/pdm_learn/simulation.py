@@ -1,27 +1,26 @@
+"""Small, reproducible utilities for simulated paired observations."""
+
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 
 import numpy as np
 import pandas as pd
-from scipy import integrate as scipy_int
-from sympy import diff, sqrt, utilities
 
-
-def eps(size: int, std: float = 1) -> np.ndarray:
-    return np.array([np.random.normal(scale=std) for _ in range(size)])
+from .features import density_map
 
 
 def standardize_pair(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    x_out = np.asarray(x, dtype=float).copy()
-    y_out = np.asarray(y, dtype=float).copy()
-    x_std = np.std(x_out)
-    y_std = np.std(y_out)
-    if x_std != 0:
-        x_out /= x_std
-    if y_std != 0:
-        y_out /= y_std
-    return x_out, y_out
+    """Center and scale each vector independently when it has nonzero spread."""
+
+    def standardize(values: np.ndarray) -> np.ndarray:
+        output = np.asarray(values, dtype=float).copy()
+        scale = float(np.nanstd(output))
+        if scale > 0 and np.isfinite(scale):
+            output = (output - np.nanmean(output)) / scale
+        return output
+
+    return standardize(x), standardize(y)
 
 
 def clip_pair_to_centers(
@@ -29,56 +28,61 @@ def clip_pair_to_centers(
     y: np.ndarray,
     centers: Iterable[float],
 ) -> tuple[np.ndarray, np.ndarray]:
-    centers_array = np.asarray(list(centers), dtype=float)
-    lower = float(np.min(centers_array))
-    upper = float(np.max(centers_array))
-    return np.clip(x, lower, upper), np.clip(y, lower, upper)
+    """Clip two vectors to the inclusive range spanned by density centers."""
+    axis = np.asarray(tuple(centers), dtype=float)
+    if axis.ndim != 1 or not len(axis):
+        raise ValueError("centers must be a non-empty one-dimensional sequence.")
+    return np.clip(x, axis.min(), axis.max()), np.clip(y, axis.min(), axis.max())
 
 
 def perturb_pair(
     x: np.ndarray,
     y: np.ndarray,
-    epsilon_std: float,
+    noise_scale: float,
     *,
     shuffle_y: bool = False,
     centers: Iterable[float] | None = None,
     rng: np.random.Generator | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Add independent noise to a pair, optionally break association, and standardize."""
+    if not np.isfinite(noise_scale) or noise_scale < 0:
+        raise ValueError("noise_scale must be a finite non-negative number.")
     generator = rng or np.random.default_rng()
-    x_out = np.asarray(x, dtype=float).copy()
-    y_out = np.asarray(y, dtype=float).copy()
-
-    x_out += generator.normal(scale=epsilon_std, size=len(x_out))
-    y_out += generator.normal(scale=epsilon_std, size=len(y_out))
-
+    x_values = np.asarray(x, dtype=float) + generator.normal(scale=noise_scale, size=len(x))
+    y_values = np.asarray(y, dtype=float) + generator.normal(scale=noise_scale, size=len(y))
+    if x_values.shape != y_values.shape:
+        raise ValueError("x and y must have matching shapes.")
     if shuffle_y:
-        y_out = generator.permutation(y_out)
-
-    x_out, y_out = standardize_pair(x_out, y_out)
-    if centers is not None:
-        x_out, y_out = clip_pair_to_centers(x_out, y_out, centers)
-    return x_out, y_out
+        y_values = generator.permutation(y_values)
+    x_values, y_values = standardize_pair(x_values, y_values)
+    return (
+        clip_pair_to_centers(x_values, y_values, centers)
+        if centers is not None
+        else (x_values, y_values)
+    )
 
 
 def iter_simulated_pairs(
-    positive: pd.DataFrame,
+    seed_pairs: pd.DataFrame,
     *,
     repeats: int,
-    epsilon_std: float,
+    noise_scale: float,
     shuffle_y: bool = False,
     centers: Iterable[float] | None = None,
     rng: np.random.Generator | None = None,
-):
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Yield perturbed pairs from consecutive rows of a seed-pair table."""
+    if len(seed_pairs) % 2:
+        raise ValueError("seed_pairs must contain an even number of rows.")
+    if isinstance(repeats, bool) or not isinstance(repeats, int) or repeats < 1:
+        raise ValueError("repeats must be a positive integer.")
     generator = rng or np.random.default_rng()
-    pair_count = len(positive) // 2
     for _ in range(repeats):
-        for index in range(pair_count):
-            x = positive.iloc[2 * index].to_numpy()
-            y = positive.iloc[2 * index + 1].to_numpy()
+        for index in range(0, len(seed_pairs), 2):
             yield perturb_pair(
-                x,
-                y,
-                epsilon_std,
+                seed_pairs.iloc[index].to_numpy(dtype=float),
+                seed_pairs.iloc[index + 1].to_numpy(dtype=float),
+                noise_scale,
                 shuffle_y=shuffle_y,
                 centers=centers,
                 rng=generator,
@@ -86,19 +90,20 @@ def iter_simulated_pairs(
 
 
 def collect_simulated_pairs(
-    positive: pd.DataFrame,
+    seed_pairs: pd.DataFrame,
     *,
     repeats: int,
-    epsilon_std: float,
+    noise_scale: float,
     shuffle_y: bool = False,
     centers: Iterable[float] | None = None,
     rng: np.random.Generator | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Materialize :func:`iter_simulated_pairs` for reuse across feature families."""
     return list(
         iter_simulated_pairs(
-            positive,
+            seed_pairs,
             repeats=repeats,
-            epsilon_std=epsilon_std,
+            noise_scale=noise_scale,
             shuffle_y=shuffle_y,
             centers=centers,
             rng=rng,
@@ -107,146 +112,75 @@ def collect_simulated_pairs(
 
 
 def build_metric_dataset(
-    positive: pd.DataFrame,
-    metric_fn: Callable[[np.ndarray, np.ndarray], float],
+    seed_pairs: pd.DataFrame,
+    metric: Callable[[np.ndarray, np.ndarray], float],
     *,
     repeats: int,
-    epsilon_std: float,
+    noise_scale: float,
     shuffle_y: bool = False,
-    column_name: str | None = None,
     centers: Iterable[float] | None = None,
+    column_name: str = "value",
     rng: np.random.Generator | None = None,
     simulated_pairs: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> pd.DataFrame:
+    """Apply a scalar metric to simulated pairs and return a one-column table."""
     pairs = (
         simulated_pairs
         if simulated_pairs is not None
         else iter_simulated_pairs(
-            positive,
+            seed_pairs,
             repeats=repeats,
-            epsilon_std=epsilon_std,
+            noise_scale=noise_scale,
             shuffle_y=shuffle_y,
             centers=centers,
             rng=rng,
         )
     )
-    values = [
-        metric_fn(x, y)
-        for x, y in pairs
-    ]
-    if column_name is None:
-        return pd.DataFrame(values)
-    return pd.DataFrame(values, columns=[column_name])
+    return pd.DataFrame({column_name: [metric(x, y) for x, y in pairs]})
 
 
-def build_heatmap_dataset(
-    positive: pd.DataFrame,
-    densitymap_fn: Callable[..., np.ndarray],
+def build_density_dataset(
+    seed_pairs: pd.DataFrame,
     *,
     centers: Iterable[float],
     repeats: int,
-    epsilon_std: float,
+    noise_scale: float,
     sigma: float,
     shuffle_y: bool = False,
     log_offset: float | None = None,
     rng: np.random.Generator | None = None,
     simulated_pairs: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> pd.DataFrame:
-    centers_array = np.asarray(list(centers), dtype=float)
+    """Build log-density-map feature rows from simulated pairs."""
+    axis = np.asarray(tuple(centers), dtype=float)
     pairs = (
         simulated_pairs
         if simulated_pairs is not None
         else iter_simulated_pairs(
-            positive,
+            seed_pairs,
             repeats=repeats,
-            epsilon_std=epsilon_std,
+            noise_scale=noise_scale,
             shuffle_y=shuffle_y,
-            centers=centers_array,
+            centers=axis,
             rng=rng,
         )
     )
-    rows = [
-        densitymap_fn(x, y, centers_array, centers_array, sigma=sigma).flatten()
-        for x, y in pairs
-    ]
+    rows = [density_map(x, y, axis, axis, sigma=sigma).ravel() for x, y in pairs]
+    if not rows:
+        return pd.DataFrame()
     output = pd.DataFrame(rows)
-    offset = log_offset if log_offset is not None else 1 / len(output.columns)
-    output += offset
-    return output.map(np.log)
+    offset = 1 / output.shape[1] if log_offset is None else float(log_offset)
+    if not np.isfinite(offset) or offset <= 0:
+        raise ValueError("log_offset must be a positive finite number.")
+    return np.log(output + offset)
 
 
-def partition(
-    u,
-    eq,
-    bounds: tuple[float, float] = (-1, 1),
-    num: int = -1,
-    spacing: float = 0.1,
-    iterations: int = 10,
-    max_err: float = 0,
-    endpoint: bool = True,
-) -> np.ndarray:
-    curr_x = bounds[0]
-    out = np.array([curr_x])
-    breakout = False
-
-    if num != -1:
-        t_func = utilities.lambdify(u, sqrt(1 + (diff(eq, u)) ** 2))
-        spacing = scipy_int.quad(t_func, bounds[0], bounds[1])[0] / (num - 1)
-        delta = spacing
-        for _ in range(num - 1):
-            curr_y = eq.subs(u, curr_x).evalf()
-            for _ in range(iterations):
-                next_y = eq.subs(u, curr_x + delta).evalf()
-                if not next_y.is_real:
-                    breakout = True
-                    break
-                dist = sqrt(delta**2 + (curr_y - next_y) ** 2)
-                if abs(dist - spacing) < max_err:
-                    break
-                delta *= spacing / dist
-                if curr_x + delta > bounds[1]:
-                    breakout = True
-                    break
-
-            if breakout:
-                break
-            curr_x += delta
-            out = np.append(out, curr_x)
-
-        if len(out) < num:
-            curr_x = bounds[1]
-            temp = np.array([curr_x])
-            delta *= -1
-            while len(out) + len(temp) < num:
-                curr_y = eq.subs(u, curr_x).evalf()
-                for _ in range(iterations):
-                    next_y = eq.subs(u, curr_x + delta).evalf()
-                    dist = sqrt(delta**2 + (curr_y - next_y) ** 2)
-                    if abs(dist - spacing) < max_err:
-                        break
-                    delta *= spacing / dist
-                curr_x += delta
-                temp = np.append(curr_x, temp)
-            out = np.append(out, temp)
-
-    else:
-        delta = spacing
-        while curr_x + delta <= bounds[1]:
-            curr_y = eq.subs(u, curr_x).evalf()
-            for _ in range(iterations):
-                next_y = eq.subs(u, curr_x + delta).evalf()
-                dist = sqrt(delta**2 + (curr_y - next_y) ** 2)
-                if abs(dist - spacing) < max_err:
-                    break
-                delta *= spacing / dist
-                if curr_x + delta > bounds[1]:
-                    breakout = True
-                    break
-            if breakout:
-                if endpoint:
-                    out = np.append(out, bounds[1])
-                break
-            curr_x += delta
-            out = np.append(out, curr_x)
-
-    return out
+__all__ = [
+    "build_density_dataset",
+    "build_metric_dataset",
+    "clip_pair_to_centers",
+    "collect_simulated_pairs",
+    "iter_simulated_pairs",
+    "perturb_pair",
+    "standardize_pair",
+]

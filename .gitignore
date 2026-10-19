@@ -1,29 +1,24 @@
-.DS_Store
-.ipynb_checkpoints/
+# Python environments, caches, and test output
+.venv/
+.uv-cache/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.venv/
-venv/
-.uv-cache/
+.ruff_cache/
 
-# Local environments and editor state
-.idea/
-.vscode/
-
-# Large local data and generated artifacts
-data/*
-artifacts/controls/
-artifacts/results/
-*.pkl
-*.xlsx
-*.png
-
-# Python packaging
+# Distribution output
 build/
 dist/
 *.egg-info/
 
-# Small curated reference inputs required by reviewer-facing notebooks
-!data/
-!data/cancer_complexes_clean.xlsx
+# Local data and generated analysis output
+data/
+artifacts/
+figures/
+runs/
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+.ipynb_checkpoints/

@@ -1,0 +1,25 @@
+{
+  "oncogene": {
+    "model": "gradient_boosting",
+    "ranking_trials": 100,
+    "n_splits": 5,
+    "random_state": 42
+  },
+  "ppi": {
+    "model": "gradient_boosting",
+    "trials": 100,
+    "ranking_max_pairs_per_complex": 10,
+    "n_splits": 5,
+    "controls": 10,
+    "max_pairs_per_complex": 5,
+    "negative_pairs": 5000,
+    "random_state": 42
+  },
+  "simulation": {
+    "model": "gradient_boosting",
+    "positive_repeats": 25,
+    "negative_repeats": 200,
+    "n_splits": 5,
+    "random_state": 42
+  }
+}
