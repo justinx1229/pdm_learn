@@ -20,9 +20,21 @@ from pdm_learn import (
     rank_candidates,
     rank_unlabeled,
 )
+from pdm_learn.features import compute_mutual_information
 
 
 class GenericCoreTests(unittest.TestCase):
+    def test_mutual_information_is_zero_for_constant_paired_inputs(self) -> None:
+        constant = np.ones(100)
+        varying = np.arange(100, dtype=float)
+        for x, y in [(constant, constant), (constant, varying), (varying, constant)]:
+            with self.subTest(x_constant=np.all(x == x[0]), y_constant=np.all(y == y[0])):
+                # The unpaired outlier must not prevent detecting a constant input.
+                self.assertEqual(
+                    compute_mutual_information(np.r_[x, 999], np.r_[y, np.nan]), 0.0
+                )
+        self.assertTrue(np.isnan(compute_mutual_information([1, 1, 2], [1, 1, np.nan])))
+
     def test_feature_builders_reject_infinite_matrix_values(self) -> None:
         datasets = {
             "left": pd.DataFrame({"id": ["A"], "S1": [np.inf], "S2": [np.inf]}),
@@ -154,11 +166,29 @@ class GenericCoreTests(unittest.TestCase):
             ],
             pairs=[FeaturePair("events", "response")],
             methods=("pdm",),
-            config=FeatureConfig(density_bins=2, drop_missing=True),
+            config=FeatureConfig(density_bins=2, drop_missing=False),
         )["pdm"]
 
         self.assertEqual(table.iloc[:, 0].tolist(), ["A", "B", "C"])
-        self.assertFalse(table.iloc[:, 1:].isna().any().any())
+        self.assertFalse(table.iloc[0, 1:].isna().any())
+        self.assertTrue(table.iloc[1:, 1:].isna().all().all())
+
+    def test_missing_binary_observations_are_excluded_from_features(self) -> None:
+        datasets = {
+            "left": pd.DataFrame({"id": ["A"], "S1": [1], "S2": [np.nan], "S3": [0]}),
+            "right": pd.DataFrame({"id": ["A"], "S1": [1], "S2": [0], "S3": [1]}),
+        }
+        tables = build_features(
+            datasets,
+            specs=[DatasetSpec(name, kind="binary", normalize=None) for name in datasets],
+            methods=("pdm", "pearson"),
+            config=FeatureConfig(drop_missing=False),
+        )
+        # Only (1, 1) and (0, 1) were observed; the log offset remains 1 / 4.
+        np.testing.assert_allclose(
+            tables["pdm"].iloc[0, 1:].to_numpy(dtype=float), np.log([0.25, 0.25, 0.75, 0.75])
+        )
+        self.assertTrue(np.isnan(tables["pearson"].iloc[0, 1]))  # Fewer than three pairs.
 
     def test_row_level_pdm_uses_identifier_in_automatic_log_smoothing_denominator(self) -> None:
         datasets = {

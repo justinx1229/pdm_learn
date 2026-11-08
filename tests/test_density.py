@@ -60,6 +60,22 @@ class DensityMapTests(unittest.TestCase):
         expected = np.outer(weights, weights) / weights.sum() ** 2
         np.testing.assert_allclose(density, expected)
 
+    def test_underflow_preserves_relative_gaussian_weights(self) -> None:
+        density = density_map([0], [1000], [-1, 0, 1], [0], sigma=1.0)
+        weights = np.array([np.exp(-0.5), 1.0, np.exp(-0.5)])
+        np.testing.assert_allclose(density, [weights / weights.sum()])
+
+    def test_underflow_preserves_equal_weights_on_continuous_axes(self) -> None:
+        for x_discrete, y_discrete in [(False, False), (True, False), (False, True)]:
+            with self.subTest(x_discrete=x_discrete, y_discrete=y_discrete):
+                x_centers = [0] if x_discrete else [-1, 1]
+                y_centers = [0] if y_discrete else [-1, 1]
+                density = density_map(
+                    [0], [0], x_centers, y_centers,
+                    x_discrete=x_discrete, y_discrete=y_discrete, sigma=0.001,
+                )
+                np.testing.assert_allclose(density, np.full(density.shape, 1 / density.size))
+
     def test_missing_observations_are_removed_in_pairs(self) -> None:
         x, y = drop_missing_observations([1.0, np.nan, 3.0], [4.0, 5.0, np.nan])
         np.testing.assert_array_equal(x, [1.0])

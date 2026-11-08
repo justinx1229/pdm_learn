@@ -113,9 +113,9 @@ headers can use `load_label_set("known_positives.txt")`; multiple files are
 combined by set union.
 
 Preparation converts nonnumeric sample values to missing values. Feature
-calculations use finite paired observations. Row-level feature construction
-fills missing binary entries and absent binary entity rows with zero where
-alignment includes them; use binary inputs only when this matches your data.
+calculations use finite paired observations. Missing values, including binary
+entries and absent entity rows, are not filled with zero. If your data defines
+missing entries as absence, explicitly encode them as zero before building features.
 `FeatureConfig` defaults to the union of entities and drops rows with missing
 features. Use `entity_universe="intersection"` to restrict eligible entities,
 or `drop_missing=False` to inspect incomplete rows. Each method may retain a

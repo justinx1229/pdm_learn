@@ -131,13 +131,10 @@ def density_map(
         return indices
 
     def normalized(squared_distances: np.ndarray) -> np.ndarray:
-        weights = np.exp(-0.5 * inverse_sigma_squared * squared_distances)
-        total = float(weights.sum())
-        if total > 0 and np.isfinite(total):
-            return weights / total
-        fallback = np.zeros_like(weights, dtype=float)
-        fallback.flat[np.argmin(squared_distances)] = 1.0
-        return fallback
+        # A common shift preserves relative weights and prevents total underflow.
+        distances = squared_distances - squared_distances.min()
+        weights = np.exp(-0.5 * inverse_sigma_squared * distances)
+        return weights / weights.sum()
 
     x_indices = indices_for(x_values, x_axis) if x_discrete else None
     y_indices = indices_for(y_values, y_axis) if y_discrete else None
@@ -251,21 +248,19 @@ def _align_pair(
     else:
         entity_ids = sorted(left_ids & right_ids)
 
-    def reindex(frame: pd.DataFrame, identifier: object, fill_binary: bool) -> pd.DataFrame:
+    def reindex(frame: pd.DataFrame, identifier: object) -> pd.DataFrame:
         indexed = frame.copy()
         indexed[identifier] = indexed[identifier].astype("string").str.strip()
         values = (
             indexed.set_index(identifier).reindex(entity_ids).apply(pd.to_numeric, errors="coerce")
         )
-        if fill_binary:
-            values = values.fillna(0.0)
         result = values.reset_index()
         result.columns = [identifier, *shared_samples]
         return result
 
     return (
-        reindex(left_selected, left_id, left_spec.kind == "binary"),
-        reindex(right_selected, right_id, right_spec.kind == "binary"),
+        reindex(left_selected, left_id),
+        reindex(right_selected, right_id),
     )
 
 
@@ -360,6 +355,8 @@ def compute_mutual_information(
     x_values, y_values = drop_missing_observations(x, y)
     if len(x_values) < 3:
         return float("nan")
+    if np.all(x_values == x_values[0]) or np.all(y_values == y_values[0]):
+        return 0.0
     try:
         if x_discrete and y_discrete:
             return float(mutual_info_score(_discrete_codes(x_values), _discrete_codes(y_values)))
