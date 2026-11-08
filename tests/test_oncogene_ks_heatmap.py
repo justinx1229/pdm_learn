@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _heatmap_script():
-    path = PROJECT_ROOT / "scripts" / "oncogene" / "make_ks_heatmap.py"
+    path = PROJECT_ROOT / "scripts" / "oncogene" / "plot_benchmarks.py"
     spec = spec_from_file_location("oncogene_ks_heatmap", path)
     assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)

@@ -95,7 +95,6 @@ Under your chosen output directory:
 
 ```text
 oncogene/results/oncogene_ranking.csv
-oncogene/results/oncogene_ks_pvalues.csv
 ppi/results/ranked_PPI_pairs_cancer.csv
 ppi/results/ppi_control_benchmarks.csv
 simulation/results/simulation_benchmarks.csv
@@ -119,17 +118,69 @@ including positives not selected in a trial. Shared pairs count toward every
 complex they belong to and occur only once in training; overlaps can leave
 some complexes below the cap. The cap is a starting setting, not a tuned optimum.
 
-Render the oncogene KS heatmap after running the pipeline:
+## Oncogene predictions, benchmarks, and figures
+
+The four oncogene entry points live in `scripts/oncogene/`. Their default
+feature and result directories remain `runs/oncogene/features/` and
+`runs/oncogene/results/`.
 
 ```bash
-uv run python scripts/oncogene/make_ks_heatmap.py \
-  --ks-file runs/my-analysis/oncogene/results/oncogene_ks_pvalues.csv \
-  --output runs/my-analysis/oncogene/results/oncogene_ks_heatmap.png
+uv run python scripts/oncogene/make_features.py --data-dir data/DepMap_Trimmed
+uv run python scripts/oncogene/run_predictions.py --label-file data/oncogene.txt
+uv run python scripts/oncogene/run_benchmarks.py --label-file data/oncogene.txt
+uv run python scripts/oncogene/plot_benchmarks.py
 ```
 
-The oncogene workflow uses positive-unlabelled ranking. To generate
-`oncogene_method_benchmarks.csv`, run `scripts/oncogene/run_predictions.py`
-with a separate `--negative-label-file` containing explicit negative labels.
+`run_predictions.py` writes only the ranked gene list.
+`run_benchmarks.py` defaults to the PDM KS diagnostic and leave-one-positive-out
+rank recovery (LOOCV). It writes `oncogene_ks_pvalues.csv`, `oncogene_loocv_curve.csv`, and
+`oncogene_loocv_held_out_ranks.csv`, without generating figures or rankings.
+Use `--methods PDM,Pearson` to select feature methods and `--loocv-trials` to
+change the ranking trial count per held-out positive. KS always uses PDM;
+`--benchmarks ks` runs just that report, optionally with `--negative-label-file`
+for explicit comparison labels instead of unlabeled candidates.
+
+To evaluate against explicit negative labels instead of running LOOCV:
+
+```bash
+uv run python scripts/oncogene/run_benchmarks.py --benchmarks labeled \
+  --label-file data/oncogene.txt --negative-label-file /path/to/negative_labels.txt
+```
+
+This writes `oncogene_method_benchmarks.csv` containing ROC AUC and average
+precision. Use `--benchmarks loocv labeled` to run both. The labeled benchmark
+requires explicit negative labels; unlabeled candidates are not used as
+confirmed negatives. `--n-splits` controls its cross-validation folds.
+Both benchmarks retain the existing model, feature selection, and random-seed
+options. The old prediction flags `--loocv` and `--loocv-methods` are replaced
+by `run_benchmarks.py --benchmarks loocv --methods ...`.
+
+`plot_benchmarks.py` reads existing results and writes PNG and PDF files to
+`RESULTS_DIR/figures/`. By default it plots all available KS, LOOCV, and labeled
+results, reporting missing inputs. Explicitly selected plots require their
+source CSVs. To plot a chosen run:
+
+```bash
+uv run python scripts/oncogene/plot_benchmarks.py \
+  --results-dir runs/my-analysis/oncogene/results \
+  --output-dir figures/oncogene --plots ks loocv
+```
+
+Available plot names are `ks`, `loocv`, and `labeled`. The heatmap retains
+`--vmin`, `--vmax`, and `--cmap` options. Rank-recovery area is not ROC AUC;
+KS p-values describe distribution differences, not enrichment direction.
+The plotting script replaces `scripts/oncogene/make_ks_heatmap.py`.
+
+For a custom run, pass the same `--feature-dir`, `--results-dir`, and
+`--label-name` to prediction and benchmarking, and the matching `--results-dir`
+and `--label-name` to plotting. `reproduce.py oncogene` continues to run only
+feature generation and prediction; run benchmarks and plotting separately.
+
+To add a benchmark, write a function in `run_benchmarks.py` returning
+`{filename_suffix: dataframe}` and add it to `BENCHMARKS`. To add its plot,
+write a function in `plot_benchmarks.py` and add its input suffix, output suffix,
+and function to `PLOTS`. The existing CLI and output loops handle the rest.
+
 PPI benchmarks hold out cancer-complex groups, joining complexes that share
 curated positive pairs into one group to prevent overlap across folds.
 Their sampled negative pairs are exclusion-based controls, not confirmed

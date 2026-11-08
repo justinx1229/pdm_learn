@@ -100,12 +100,10 @@ def run_oncogene(
             str(settings["model"]),
             "--ranking-trials",
             str(settings["ranking_trials"]),
-            "--n-splits",
-            str(settings["n_splits"]),
             "--random-state",
             str(settings["random_state"]),
         ],
-        stage="Oncogene 2/2: Ranking genes and calculating KS statistics",
+        stage="Oncogene 2/2: Ranking genes",
     )
 
 

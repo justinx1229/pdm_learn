@@ -205,12 +205,24 @@ file flags for other filenames or locations.
 
 | Workflow | Results directory | Main files |
 | --- | --- | --- |
-| Oncogene | `oncogene/results/` | `oncogene_ranking.csv`, `oncogene_ks_pvalues.csv` |
+| Oncogene | `oncogene/results/` | `oncogene_ranking.csv` |
 | PPI | `ppi/results/` | `ranked_PPI_pairs_cancer.csv`, `ppi_control_benchmarks.csv` |
 | Simulation | `simulation/results/` | `simulation_benchmarks.csv` |
 
 See [REPRODUCE.md](REPRODUCE.md) for input filenames, settings, control
-sampling, benchmark interpretation, and the oncogene KS heatmap command.
+sampling, benchmark interpretation, and oncogene plotting commands.
+
+The oncogene workflow has four entry points in `scripts/oncogene/`:
+
+| Script | Responsibility |
+| --- | --- |
+| `make_features.py` | Build PDM and scalar feature tables |
+| `run_predictions.py` | Write candidate rankings |
+| `run_benchmarks.py` | Write KS diagnostics, LOOCV, or labeled-evaluation CSVs |
+| `plot_benchmarks.py` | Read saved CSVs and export PNG/PDF figures |
+
+Benchmarking and plotting are separate, explicit steps; the oncogene
+`reproduce.py` workflow runs feature generation and prediction only.
 The fixture run exercises the pipeline without reproducing study results.
 
 The Python recipes live in `pdm_learn.workflows.oncogene` and
