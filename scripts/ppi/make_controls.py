@@ -21,9 +21,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build PDM positive and exclusion-based negative PPI controls."
     )
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument(
-        "--complexes", type=Path, default=PROJECT_ROOT / "data" / "cancer_complexes_clean.xlsx"
+        "--data-dir", type=Path, default=PROJECT_ROOT / "data",
+        help="Directory containing matrix files directly (default: data/).",
+    )
+    parser.add_argument(
+        "--complexes", type=Path, default=None,
+        help="Complex table (default: <data-dir>/cancer_complexes_clean.xlsx).",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=PROJECT_ROOT / "runs" / "ppi" / "controls"
@@ -69,7 +73,7 @@ def main() -> None:
     datasets = load_inputs(args.data_dir, input_paths=input_overrides(args))
     positives, negatives = build_control_feature_tables(
         datasets,
-        load_cancer_complexes(args.complexes),
+        load_cancer_complexes(args.complexes or args.data_dir / "cancer_complexes_clean.xlsx"),
         negative_candidate_pairs=load_biogrid_pairs(args.negative_pair_candidates),
         controls=args.controls,
         max_pairs_per_complex=args.max_pairs_per_complex,

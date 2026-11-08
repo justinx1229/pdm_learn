@@ -15,24 +15,45 @@ For the optional walkthrough notebook, also run
 
 ## Inputs
 
-Oncogene and PPI workflows use this layout under `--data-dir`:
+Set `--data-dir` to the directory containing the input files. Oncogene and
+PPI workflows use these default filenames:
 
 ```text
 <data-dir>/
-├── DepMap_Trimmed/
-│   ├── Gene_Expression_Trimmed.csv
-│   ├── Copy_Number_Trimmed.csv
-│   ├── shRNA_Trimmed.csv
-│   ├── Gene_Mutation_Trimmed.csv
-│   └── CRISPR_Trimmed.csv
+├── Gene_Expression_Trimmed.csv
+├── Copy_Number_Trimmed.csv
+├── shRNA_Trimmed.csv
+├── Gene_Mutation_Trimmed.csv
+├── CRISPR_Trimmed.csv
 ├── oncogene.txt                  # Oncogene labels
-├── cancer_complexes_clean.xlsx   # PPI complexes; cancer_complexes.csv also works
+├── cancer_complexes_clean.xlsx   # PPI complexes
 └── clean_biogrid_interactions.csv # PPI candidate pairs
 ```
 
 Matrices contain a gene identifier column followed by sample columns. Supply
-only the files used by the workflow you run. If both complex tables are
-present, PPI uses the XLSX workbook. Simulation generates its own data.
+only the files used by the workflow you run. Simulation generates its own data.
+
+For other names or locations, use `--expression`, `--copy-number`, `--shrna`,
+`--mutation`, and `--crispr` to override individual matrix paths. Use
+`--label-file`, `--biogrid`, and `--complexes` for labels, candidate pairs, and
+complexes. Relative file paths are resolved from your working directory.
+These options are available on `reproduce.py` and the corresponding individual
+scripts.
+
+`--complexes` accepts XLSX or CSV files. When omitted, `reproduce.py` uses
+`cancer_complexes_clean.xlsx` if present, otherwise `cancer_complexes.csv`.
+
+To generate oncogene features:
+
+```bash
+uv run python scripts/oncogene/make_features.py \
+  --data-dir data/DepMap_Trimmed \
+  --output-dir runs/oncogene/features
+```
+
+These scripts use the DepMap assay recipe. For different assay types or
+entity domains, use the generic `load_matrices`, `DatasetSpec`, `build_features`,
+and `build_pair_features` APIs described in [README.md](README.md).
 
 ## Run
 
@@ -54,7 +75,10 @@ The repository includes small sample datasets and reduced settings:
 
 ```bash
 uv run python scripts/reproduce.py all \
-  --data-dir tests/fixtures/reproduction \
+  --data-dir tests/fixtures/reproduction/DepMap_Trimmed \
+  --label-file tests/fixtures/reproduction/oncogene.txt \
+  --biogrid tests/fixtures/reproduction/clean_biogrid_interactions.csv \
+  --complexes tests/fixtures/reproduction/cancer_complexes.csv \
   --config tests/fixtures/reproduction/workflows.json \
   --output-dir runs/example
 ```

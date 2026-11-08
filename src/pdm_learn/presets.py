@@ -1,13 +1,7 @@
-"""Ready-to-use configuration for the maintained DepMap recipes.
+"""Default filenames, matrix specifications, and assay pairs for DepMap workflows.
 
-The core :mod:`pdm_learn` API deliberately does not know about DepMap file
-names or assay naming conventions.  This module is the small boundary where
-those conventions live.  It contains immutable, dependency-free metadata and
-does not read files or import pandas.
-
-``depmap_oncogene`` and ``depmap_ppi`` are preset objects. They resolve input
-paths and create the generic ``DatasetSpec`` and ``FeaturePair`` objects used
-by the two optional workflows.
+The immutable ``depmap_oncogene`` and ``depmap_ppi`` presets resolve input
+paths and create ``DatasetSpec`` and ``FeaturePair`` objects for the core API.
 """
 
 from __future__ import annotations
@@ -30,7 +24,7 @@ TRIMMED_INPUT_FILENAMES = MappingProxyType(
         "crispr": "CRISPR_Trimmed.csv",
     }
 )
-"""Names of the normalized input tables below ``DepMap_Trimmed``."""
+"""Default filenames for prepared DepMap matrices."""
 
 
 @dataclass(frozen=True)
@@ -110,7 +104,6 @@ class DepMapPreset:
     filenames: Mapping[str, str]
     input_names: Mapping[str, str]
     defaults: Mapping[str, object] = field(default_factory=dict)
-    input_directory: str = "DepMap_Trimmed"
 
     def __post_init__(self) -> None:
         dataset_names = tuple(dataset.name for dataset in self.datasets)
@@ -167,12 +160,12 @@ class DepMapPreset:
         Parameters
         ----------
         data_dir:
-            Directory containing the preset's ``input_directory``.
+            Directory containing the matrix files directly.
         input_paths:
             Optional paths keyed by either a user-facing input key or generic
             dataset name.  Only known preset inputs are accepted.
         """
-        root = Path(data_dir) / self.input_directory
+        root = Path(data_dir)
         resolved = {input_key: root / filename for input_key, filename in self.filenames.items()}
         reverse_names = {
             dataset_name: input_key for input_key, dataset_name in self.input_names.items()

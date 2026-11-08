@@ -27,7 +27,7 @@ def load_inputs(
     *,
     preset: DepMapPreset = PRESET,
 ) -> dict[str, pd.DataFrame]:
-    """Load the recipe's standardized DepMap matrices from ``data_dir``."""
+    """Load prepared matrices directly from ``data_dir`` or explicit file paths."""
     return load_matrices(
         preset.resolve_input_paths(data_dir, input_paths),
         specs=preset.make_dataset_specs(),

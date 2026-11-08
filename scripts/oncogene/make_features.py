@@ -14,7 +14,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build gene-level feature tables from trimmed DepMap inputs."
     )
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
+    parser.add_argument(
+        "--data-dir", type=Path, default=PROJECT_ROOT / "data",
+        help="Directory containing matrix files directly (default: data/).",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,

@@ -72,6 +72,21 @@ def _matrices() -> dict[str, pd.DataFrame]:
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_recipes_load_directories_without_a_required_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            matrices = _matrices()
+            for name, filename in oncogene.PRESET.filenames.items():
+                matrices[name].to_csv(root / filename, index=False)
+
+            for recipe in (oncogene, ppi):
+                with self.subTest(recipe=recipe.__name__):
+                    datasets = recipe.load_inputs(root)
+                    self.assertEqual(set(datasets), set(recipe.PRESET.dataset_names))
+                    pd.testing.assert_frame_equal(
+                        datasets["gene_mut"], matrices["mutation"], check_dtype=False
+                    )
+
     def test_oncogene_recipe_loads_preset_paths_and_uses_generic_builder(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -321,10 +321,9 @@ def loocv_rank_recovery(
     """Return a leave-one-positive-out rank-recovery curve and held-out ranks.
 
     Each known positive is withheld from the positive-label set, ranked with
-    :func:`rank_candidates`, and compared with the unlabeled candidates.  The
-    returned curve uses the main-branch rank-recovery convention: a threshold
-    of zero means the held-out positive was ranked first.  Its ``area`` is the
-    normalized area under the cumulative recovery curve. Tied scores share
+    :func:`rank_candidates`, and compared with the unlabeled candidates.
+    A rank threshold of zero includes only held-out positives ranked first.
+    The ``area`` is the normalized area under the cumulative recovery curve. Tied scores share
     the worst (largest) zero-based rank in their tie, so a tied group is
     recovered only when the threshold includes the entire group.
 

@@ -28,12 +28,14 @@ class ReproductionScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory) / "custom"
             output_dir = Path(directory) / "runs"
-            shutil.copytree(FIXTURE_DIR / "DepMap_Trimmed", data_dir / "DepMap_Trimmed")
-            for path in (data_dir / "DepMap_Trimmed").glob("*.csv"):
+            shutil.copytree(FIXTURE_DIR / "DepMap_Trimmed", data_dir)
+            for path in data_dir.glob("*.csv"):
                 table = pd.read_csv(path)
                 table.iloc[:, 0] = "custom_" + table.iloc[:, 0].astype(str)
                 table.to_csv(path, index=False)
-            labels = data_dir / "oncogene.txt"
+            expression = Path(directory) / "my expression.csv"
+            (data_dir / "Gene_Expression_Trimmed.csv").rename(expression)
+            labels = Path(directory) / "positives.txt"
             labels.write_text(
                 "".join(
                     f"custom_{label}\n"
@@ -45,6 +47,7 @@ class ReproductionScriptTests(unittest.TestCase):
                     sys.executable, "scripts/reproduce.py", "oncogene",
                     "--config", str(TEST_CONFIG),
                     "--data-dir", str(data_dir), "--output-dir", str(output_dir),
+                    "--expression", str(expression), "--label-file", str(labels),
                 ],
                 cwd=PROJECT_ROOT,
                 check=True,
@@ -62,21 +65,35 @@ class ReproductionScriptTests(unittest.TestCase):
                 script.main()
             run.assert_called_once()
 
-    def test_ppi_prefers_workbook_when_csv_also_exists(self) -> None:
+    def test_ppi_uses_explicit_inputs_even_when_default_files_exist(self) -> None:
         script = _reproduction_script()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workbook = root / "cancer_complexes_clean.xlsx"
             workbook.touch()
-            (root / "cancer_complexes.csv").touch()
+            complexes = root / "custom complexes.csv"
+            complexes.touch()
+            pairs = root / "custom pairs.csv"
+            expression = root / "custom expression.csv"
             with patch.object(script, "_run") as run:
-                script.run_ppi(root, root / "output", json.loads(TEST_CONFIG.read_text())["ppi"])
+                script.run_ppi(
+                    root, root / "output", json.loads(TEST_CONFIG.read_text())["ppi"],
+                    matrix_args=("--expression", str(expression)),
+                    biogrid=pairs, complexes=complexes,
+                )
             complex_paths = []
             for call in run.call_args_list:
                 command = call.args[0]
                 if "--complexes" in command:
                     complex_paths.append(command[command.index("--complexes") + 1])
-            self.assertEqual(complex_paths, [str(workbook), str(workbook)])
+            self.assertEqual(complex_paths, [str(complexes), str(complexes)])
+            features, controls = [call.args[0] for call in run.call_args_list[:2]]
+            for command in (features, controls):
+                self.assertEqual(command[command.index("--expression") + 1], str(expression))
+            self.assertEqual(features[features.index("--biogrid") + 1], str(pairs))
+            self.assertEqual(
+                controls[controls.index("--negative-pair-candidates") + 1], str(pairs)
+            )
             command = run.call_args_list[-1].args[0]
             self.assertEqual(command[command.index("--max-pairs-per-complex") + 1], "10")
 
@@ -91,6 +108,23 @@ class ReproductionScriptTests(unittest.TestCase):
         self.assertEqual(controls[controls.index("--max-pairs-per-complex") + 1], "5")
         self.assertEqual(ranking[ranking.index("--max-pairs-per-complex") + 1], "2")
 
+    def test_ppi_preserves_default_complex_file_selection(self) -> None:
+        script = _reproduction_script()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            csv = root / "cancer_complexes.csv"
+            csv.touch()
+            workbook = root / "cancer_complexes_clean.xlsx"
+            for expected in (csv, workbook):
+                expected.touch()
+                with self.subTest(expected=expected.name), patch.object(script, "_run") as run:
+                    script.run_ppi(
+                        root, root / "output", json.loads(TEST_CONFIG.read_text())["ppi"]
+                    )
+                    for call in run.call_args_list[1:]:
+                        command = call.args[0]
+                        self.assertEqual(command[command.index("--complexes") + 1], str(expected))
+
     def test_pipeline_runs_all_workflows_on_sample_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory) / "runs"
@@ -100,7 +134,13 @@ class ReproductionScriptTests(unittest.TestCase):
                     "scripts/reproduce.py",
                     "all",
                     "--data-dir",
-                    str(FIXTURE_DIR),
+                    str(FIXTURE_DIR / "DepMap_Trimmed"),
+                    "--label-file",
+                    str(FIXTURE_DIR / "oncogene.txt"),
+                    "--biogrid",
+                    str(FIXTURE_DIR / "clean_biogrid_interactions.csv"),
+                    "--complexes",
+                    str(FIXTURE_DIR / "cancer_complexes.csv"),
                     "--config",
                     str(TEST_CONFIG),
                     "--output-dir",

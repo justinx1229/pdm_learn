@@ -188,7 +188,10 @@ Run all three workflows on the included small fixtures:
 
 ```bash
 uv run python scripts/reproduce.py all \
-  --data-dir tests/fixtures/reproduction \
+  --data-dir tests/fixtures/reproduction/DepMap_Trimmed \
+  --label-file tests/fixtures/reproduction/oncogene.txt \
+  --biogrid tests/fixtures/reproduction/clean_biogrid_interactions.csv \
+  --complexes tests/fixtures/reproduction/cancer_complexes.csv \
   --config tests/fixtures/reproduction/workflows.json \
   --output-dir runs/example
 ```
@@ -197,6 +200,8 @@ Replace `all` with `oncogene`, `ppi`, or `simulation` to run one workflow.
 Simulation generates its own inputs. For study or custom data, supply your
 input directory and settings; defaults are `data/`, `runs/`, and
 [`reproduction/workflows.json`](reproduction/workflows.json).
+Set `--data-dir` to the directory containing the input files. Use individual
+file flags for other filenames or locations.
 
 | Workflow | Results directory | Main files |
 | --- | --- | --- |
@@ -210,9 +215,7 @@ The fixture run exercises the pipeline without reproducing study results.
 
 The Python recipes live in `pdm_learn.workflows.oncogene` and
 `pdm_learn.workflows.ppi`; their DepMap specifications live in
-`pdm_learn.presets`. For other domains, use the core API directly. Version 1.0
-removes the former root-level `pdm_learn.oncogene`, `pdm_learn.ppi`, and
-`pdm_learn.preprocessing` modules.
+`pdm_learn.presets`. For other domains, use the core API directly.
 
 The optional [reviewer walkthrough](notebooks/reviewer_walkthrough.ipynb)
 reads workflow outputs. Install its environment with

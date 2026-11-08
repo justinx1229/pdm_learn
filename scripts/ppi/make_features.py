@@ -18,7 +18,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build PDM features for BioGRID pairs using the shared trimmed DepMap inputs."
     )
-    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data")
+    parser.add_argument(
+        "--data-dir", type=Path, default=PROJECT_ROOT / "data",
+        help="Directory containing matrix files directly (default: data/).",
+    )
     parser.add_argument("--biogrid", type=Path, default=None)
     parser.add_argument(
         "--output-dir", type=Path, default=PROJECT_ROOT / "runs" / "ppi" / "features"
@@ -47,7 +50,7 @@ def input_overrides(args: argparse.Namespace) -> dict[str, Path]:
 
 
 def build_symmetric_features(datasets, pairs):
-    """Compatibility wrapper for the PPI workflow's symmetric PDM builder."""
+    """Build symmetric PDM features for undirected protein pairs."""
     return build_symmetric_density_features(datasets, pairs, progress=True)
 
 

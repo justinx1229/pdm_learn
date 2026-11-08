@@ -24,7 +24,27 @@ def parse_args() -> argparse.Namespace:
         "--data-dir",
         type=Path,
         default=PROJECT_ROOT / "data",
-        help="Input directory for study, demo, or custom datasets. Defaults to data/.",
+        help="Directory containing input files directly. Defaults to data/.",
+    )
+    for flag in ("expression", "copy-number", "shrna", "mutation", "crispr"):
+        parser.add_argument(
+            f"--{flag}", type=Path,
+            help="Matrix file path (overrides the default in --data-dir).",
+        )
+    parser.add_argument(
+        "--label-file", type=Path,
+        help="Oncogene labels (default: <data-dir>/oncogene.txt).",
+    )
+    parser.add_argument(
+        "--biogrid", type=Path,
+        help="PPI candidate pairs (default: <data-dir>/clean_biogrid_interactions.csv).",
+    )
+    parser.add_argument(
+        "--complexes", type=Path,
+        help=(
+            "PPI complex table (default: cancer_complexes_clean.xlsx "
+            "or cancer_complexes.csv in data-dir)."
+        ),
     )
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "runs")
     parser.add_argument(
@@ -44,7 +64,14 @@ def _run(command: list[str], *, stage: str) -> None:
     print(f"[{stage}] Completed in {perf_counter() - started:.1f}s", flush=True)
 
 
-def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> None:
+def run_oncogene(
+    data_dir: Path,
+    output_dir: Path,
+    settings: dict[str, object],
+    *,
+    matrix_args: tuple[str, ...] = (),
+    label_file: Path | None = None,
+) -> None:
     features = output_dir / "oncogene" / "features"
     results = output_dir / "oncogene" / "results"
     _run(
@@ -53,6 +80,7 @@ def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) 
             str(PROJECT_ROOT / "scripts" / "oncogene" / "make_features.py"),
             "--data-dir",
             str(data_dir),
+            *matrix_args,
             "--output-dir",
             str(features),
         ],
@@ -62,8 +90,8 @@ def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) 
         [
             sys.executable,
             str(PROJECT_ROOT / "scripts" / "oncogene" / "run_predictions.py"),
-            "--data-dir",
-            str(data_dir),
+            "--label-file",
+            str(label_file or data_dir / "oncogene.txt"),
             "--feature-dir",
             str(features),
             "--results-dir",
@@ -81,17 +109,29 @@ def run_oncogene(data_dir: Path, output_dir: Path, settings: dict[str, object]) 
     )
 
 
-def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> None:
+def run_ppi(
+    data_dir: Path,
+    output_dir: Path,
+    settings: dict[str, object],
+    *,
+    matrix_args: tuple[str, ...] = (),
+    biogrid: Path | None = None,
+    complexes: Path | None = None,
+) -> None:
     features = output_dir / "ppi" / "features"
     results = output_dir / "ppi" / "results"
     controls = output_dir / "ppi" / "controls"
-    biogrid = data_dir / "clean_biogrid_interactions.csv"
+    biogrid = biogrid or data_dir / "clean_biogrid_interactions.csv"
+    if complexes is None:
+        workbook = data_dir / "cancer_complexes_clean.xlsx"
+        complexes = workbook if workbook.exists() else data_dir / "cancer_complexes.csv"
     _run(
         [
             sys.executable,
             str(PROJECT_ROOT / "scripts" / "ppi" / "make_features.py"),
             "--data-dir",
             str(data_dir),
+            *matrix_args,
             "--biogrid",
             str(biogrid),
             "--output-dir",
@@ -99,18 +139,13 @@ def run_ppi(data_dir: Path, output_dir: Path, settings: dict[str, object]) -> No
         ],
         stage="PPI 1/3: Building pair features",
     )
-    complex_name = (
-        "cancer_complexes_clean.xlsx"
-        if (data_dir / "cancer_complexes_clean.xlsx").exists()
-        else "cancer_complexes.csv"
-    )
-    complexes = data_dir / complex_name
     _run(
         [
             sys.executable,
             str(PROJECT_ROOT / "scripts" / "ppi" / "make_controls.py"),
             "--data-dir",
             str(data_dir),
+            *matrix_args,
             "--complexes",
             str(complexes),
             "--output-dir",
@@ -197,12 +232,24 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
 def main() -> None:
     args = parse_args()
     settings = json.loads(args.config.read_text())
+    matrix_args = tuple(
+        value
+        for name in ("expression", "copy_number", "shrna", "mutation", "crispr")
+        if (path := getattr(args, name)) is not None
+        for value in (f"--{name.replace('_', '-')}", str(path))
+    )
     workflows = ("oncogene", "ppi", "simulation") if args.workflow == "all" else (args.workflow,)
     for workflow in workflows:
         if workflow == "oncogene":
-            run_oncogene(args.data_dir, args.output_dir, settings[workflow])
+            run_oncogene(
+                args.data_dir, args.output_dir, settings[workflow],
+                matrix_args=matrix_args, label_file=args.label_file,
+            )
         elif workflow == "ppi":
-            run_ppi(args.data_dir, args.output_dir, settings[workflow])
+            run_ppi(
+                args.data_dir, args.output_dir, settings[workflow],
+                matrix_args=matrix_args, biogrid=args.biogrid, complexes=args.complexes,
+            )
         else:
             run_simulation(args.output_dir, settings[workflow])
 
