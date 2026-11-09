@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from itertools import combinations
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import precision_recall_curve, roc_curve
 
 from pdm_learn.labels import load_label_set
 from pdm_learn.modeling import (
@@ -17,6 +20,26 @@ from pdm_learn.modeling import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ASSAYS = ("gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR")
+
+
+def _common_tables(tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Use identical complete genes and row order for every comparison."""
+    clean = {}
+    for name, table in tables.items():
+        identifier = table.columns[0]
+        ids = table[identifier].astype("string").str.strip()
+        values = table.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+        valid = ids.notna() & ids.ne("") & np.isfinite(values).all(axis=1)
+        values = values.loc[valid].copy()
+        values.index = pd.Index(ids.loc[valid], name=identifier)
+        if values.index.has_duplicates:
+            raise ValueError(f"{name} has duplicate gene identifiers.")
+        clean[name] = values
+    common = sorted(set.intersection(*(set(table.index) for table in clean.values())))
+    if not common:
+        raise ValueError("No complete genes are shared by the selected feature tables.")
+    return {name: table.loc[common].reset_index() for name, table in clean.items()}
 
 
 def _load_feature_tables(feature_dir: Path, density_name: str) -> dict[str, pd.DataFrame]:
@@ -110,8 +133,9 @@ def run_loocv(
             random_state=args.random_state,
             progress=True,
         )
-        curves.append(curve.assign(method=name, comparison="unlabeled_candidates"))
-        ranks.append(held_out.assign(method=name, comparison="unlabeled_candidates"))
+        metadata = {"method": name, "model": args.model, "comparison": "unlabeled_candidates"}
+        curves.append(curve.assign(**metadata))
+        ranks.append(held_out.assign(**metadata))
     return {
         "loocv_curve": pd.concat(curves, ignore_index=True),
         "loocv_held_out_ranks": pd.concat(ranks, ignore_index=True),
@@ -122,10 +146,21 @@ def run_labeled(
     tables: dict[str, pd.DataFrame], labels: set[str], args: argparse.Namespace
 ) -> dict[str, pd.DataFrame]:
     """Evaluate ROC AUC and average precision against explicit negative controls."""
-    negatives = load_label_set(args.negative_label_file, header=None)
-    results = []
+    return run_pr(tables, labels, args)
+
+
+def run_pr(
+    tables: dict[str, pd.DataFrame], labels: set[str], args: argparse.Namespace
+) -> dict[str, pd.DataFrame]:
+    """Save PR/ROC curves from pooled out-of-fold predictions, not LOOCV ranks."""
+    negatives = (
+        load_label_set(args.negative_label_file, header=None)
+        if args.negative_label_file is not None else None
+    )
+    comparison = "explicit_negative_controls" if negatives is not None else "unlabeled_candidates"
+    results, predictions, pr_curves, roc_curves = [], [], [], []
     for name, table in tables.items():
-        result = evaluate_labeled_features(
+        result, predicted = evaluate_labeled_features(
             table,
             labels,
             negative_labels=negatives,
@@ -134,14 +169,92 @@ def run_labeled(
             feature_selection=name == "PDM",
             n_features=args.features_left,
             random_state=args.random_state,
+            return_predictions=True,
         )
-        results.append(result.assign(method=name))
-    return {"method_benchmarks": pd.concat(results, ignore_index=True)}
+        metadata = {"method": name, "model": args.model, "comparison": comparison}
+        results.append(result.assign(**metadata))
+        predictions.append(predicted.assign(**metadata))
+        precision, recall, thresholds = precision_recall_curve(predicted.target, predicted.score)
+        pr_curves.append(pd.DataFrame({
+            "recall": recall, "precision": precision, "threshold": np.r_[thresholds, np.nan],
+            "average_precision": result.average_precision.iloc[0],
+            "prevalence": predicted.target.mean(),
+        }).assign(**metadata))
+        fpr, tpr, thresholds = roc_curve(predicted.target, predicted.score)
+        roc_curves.append(pd.DataFrame({
+            "false_positive_rate": fpr, "true_positive_rate": tpr, "threshold": thresholds,
+            "roc_auc": result.roc_auc.iloc[0],
+        }).assign(**metadata))
+    return {
+        "method_benchmarks": pd.concat(results, ignore_index=True),
+        "cv_predictions": pd.concat(predictions, ignore_index=True),
+        "pr_curve": pd.concat(pr_curves, ignore_index=True),
+        "roc_curve": pd.concat(roc_curves, ignore_index=True),
+    }
+
+
+def _pdm_recovery(table, labels, args, model):
+    return loocv_rank_recovery(
+        table, labels, model=model, trials=args.loocv_trials, feature_selection=True,
+        n_features=args.features_left, random_state=args.random_state, progress=True,
+    )
+
+
+def run_models(tables, labels, args):
+    """Compare supported classifiers on the same PDM features and genes."""
+    curves, ranks, summaries = [], [], []
+    for model in dict.fromkeys(args.models):
+        started = perf_counter()
+        curve, held_out = _pdm_recovery(tables["PDM"], labels, args, model)
+        metadata = {"model": model, "method": "PDM", "comparison": "unlabeled_candidates"}
+        curves.append(curve.assign(**metadata))
+        ranks.append(held_out.assign(**metadata))
+        summaries.append({
+            **metadata, "loocv_area": curve.loocv_area.iloc[0],
+            "elapsed_seconds": perf_counter() - started,
+            "positive_rows": len(held_out),
+            "unlabeled_candidate_rows": curve.unlabeled_candidate_rows.iloc[0],
+        })
+    return {
+        "model_loocv_curve": pd.concat(curves, ignore_index=True),
+        "model_loocv_held_out_ranks": pd.concat(ranks, ignore_index=True),
+        "model_benchmarks": pd.DataFrame(summaries),
+    }
+
+
+def run_ablation(tables, labels, args):
+    """Remove zero, one, or two assays, retaining only pairs among used assays."""
+    table = tables["PDM"]
+    summaries, ranks = [], []
+    for count in range(3):
+        for omitted in combinations(ASSAYS, count):
+            used = set(ASSAYS) - set(omitted)
+            columns = [column for column in table.columns[1:]
+                       if set(column.split(".")[:2]) <= used]
+            if not columns:
+                raise ValueError(f"No PDM features remain after omitting {omitted}.")
+            name = "+".join(omitted) or "none"
+            print(f"ablation: omitted {name}", flush=True)
+            curve, held_out = _pdm_recovery(table[[table.columns[0], *columns]], labels,
+                                          args, args.model)
+            metadata = {"omitted": name, "model": args.model, "comparison": "unlabeled_candidates"}
+            summaries.append({
+                **metadata, **{assay: int(assay in used) for assay in ASSAYS},
+                "feature_columns": len(columns), "loocv_area": curve.loocv_area.iloc[0],
+                "positive_rows": len(held_out),
+                "unlabeled_candidate_rows": curve.unlabeled_candidate_rows.iloc[0],
+            })
+            ranks.append(held_out.assign(**metadata))
+    return {"ablation": pd.DataFrame(summaries),
+            "ablation_held_out_ranks": pd.concat(ranks, ignore_index=True)}
 
 
 # Add a benchmark function above and register it here. Each function returns
 # {filename_suffix: dataframe}; main handles the common CSV writing.
-BENCHMARKS = {"ks": run_ks, "loocv": run_loocv, "labeled": run_labeled}
+BENCHMARKS = {
+    "ks": run_ks, "loocv": run_loocv, "models": run_models,
+    "ablation": run_ablation, "pr": run_pr, "labeled": run_labeled,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -168,9 +281,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--methods",
         default="all",
-        help="Comma-separated methods for LOOCV/labeled evaluation, or all. KS always uses PDM.",
+        help="Comma-separated methods, or all; also define the shared gene set. KS uses full PDM.",
     )
     parser.add_argument("--model", choices=MODEL_NAMES, default="gradient_boosting")
+    parser.add_argument("--models", nargs="+", choices=MODEL_NAMES, default=list(MODEL_NAMES),
+                        help="Classifiers for the models benchmark (PDM features only).")
     parser.add_argument("--loocv-trials", type=int, default=25)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--features-left", type=int, default=None)
@@ -178,6 +293,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if "labeled" in args.benchmarks and args.negative_label_file is None:
         parser.error("The labeled benchmark requires --negative-label-file.")
+    if "labeled" in args.benchmarks and "pr" in args.benchmarks:
+        parser.error("Select pr or labeled; both write the same classification outputs.")
     return args
 
 
@@ -187,11 +304,30 @@ def main() -> None:
         args.label_file or args.data_dir / "oncogene.txt", header=None, labels=args.positive_extra
     )
     tables = _load_feature_tables(args.feature_dir, args.density_name)
-    selected_tables = {name: tables[name] for name in _method_names(args.methods, tables)}
+    selected_methods = _method_names(args.methods, tables)
+    selected_tables = {name: tables[name] for name in selected_methods}
+    if any(name in args.benchmarks for name in ("models", "ablation")):
+        if "PDM" not in tables:
+            raise ValueError("Model comparison and assay ablation require PDM features.")
+        selected_tables["PDM"] = tables["PDM"]
+    common = _common_tables(selected_tables) if args.benchmarks != ["ks"] else selected_tables
+    if args.benchmarks != ["ks"]:
+        count = len(next(iter(common.values())))
+        print(f"Comparison tables: {', '.join(common)}; shared genes: {count}", flush=True)
     args.results_dir.mkdir(parents=True, exist_ok=True)
     for name in dict.fromkeys(args.benchmarks):
-        inputs = tables if name == "ks" else selected_tables
+        inputs = tables if name == "ks" else common
+        if name in ("loocv", "pr", "labeled"):
+            inputs = {method: common[method] for method in selected_methods}
         for suffix, result in BENCHMARKS[name](inputs, labels, args).items():
+            if name != "ks":
+                result = result.assign(
+                    random_state=args.random_state, n_features=args.features_left
+                )
+                setting = {"n_splits": args.n_splits} if name in ("pr", "labeled") else {
+                    "trials": args.loocv_trials
+                }
+                result = result.assign(**setting)
             path = args.results_dir / f"{args.label_name}_{suffix}.csv"
             result.to_csv(path, index=False)
             print(f"{name}: {path}")

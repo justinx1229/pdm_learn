@@ -156,7 +156,7 @@ options. The old prediction flags `--loocv` and `--loocv-methods` are replaced
 by `run_benchmarks.py --benchmarks loocv --methods ...`.
 
 `plot_benchmarks.py` reads existing results and writes PNG and PDF files to
-`RESULTS_DIR/figures/`. By default it plots all available KS, LOOCV, and labeled
+`RESULTS_DIR/figures/`. By default it plots all available benchmark
 results, reporting missing inputs. Explicitly selected plots require their
 source CSVs. To plot a chosen run:
 
@@ -166,10 +166,75 @@ uv run python scripts/oncogene/plot_benchmarks.py \
   --output-dir figures/oncogene --plots ks loocv
 ```
 
-Available plot names are `ks`, `loocv`, and `labeled`. The heatmap retains
+Available plot names are `ks`, `loocv`, `models`, `ablation`, `pr`, `roc`, and `labeled`.
+The heatmap retains
 `--vmin`, `--vmax`, and `--cmap` options. Rank-recovery area is not ROC AUC;
 KS p-values describe distribution differences, not enrichment direction.
 The plotting script replaces `scripts/oncogene/make_ks_heatmap.py`.
+
+### Paper figure suite
+
+Generate the method comparison, classifier comparison, assay ablation, and
+precision–recall/ROC curves from existing feature tables:
+
+```bash
+uv run python scripts/oncogene/run_benchmarks.py \
+  --label-file data/oncogene.txt \
+  --benchmarks ks loocv models ablation pr
+uv run python scripts/oncogene/plot_benchmarks.py
+```
+
+These are new evaluations, so they need not match numbers from an older version.
+All comparisons use the intersection of complete genes across the selected
+feature methods, sorted identically. KS remains a standalone diagnostic on the
+full PDM table. Feature selection stays inside each training trial or fold.
+
+| Benchmark | Saved results (after the `oncogene_` prefix) | Figure |
+| --- | --- | --- |
+| `loocv` | `loocv_curve.csv`, `loocv_held_out_ranks.csv` | Feature-method recovery curves |
+| `models` | `model_loocv_curve.csv`, `model_loocv_held_out_ranks.csv`, `model_benchmarks.csv` | PDM classifier recovery curves |
+| `ablation` | `ablation.csv`, `ablation_held_out_ranks.csv` | Assay inclusion matrix with recovery-area dots |
+| `pr` or `labeled` | `cv_predictions.csv`, `pr_curve.csv`, `roc_curve.csv`, `method_benchmarks.csv` | PR, ROC, and metric summary |
+
+`models` uses the four supported classifiers: logistic regression, random forest,
+gradient boosting, and SVM. Select a subset with `--models gradient_boosting svm`.
+The other benchmarks use `--model` (default: gradient boosting). Model summaries
+also record elapsed seconds. `ablation` uses PDM and evaluates all five assays,
+each single omission, and each pair of omissions: 16 combinations total. Removing
+an assay removes every feature pair involving it, while keeping the gene set fixed.
+
+SVM uses sigmoid calibration through `CalibratedClassifierCV(ensemble=False)`
+with up to five stratified folds inside each training set. It requires at least
+two training rows per class (at least three positives for LOOCV). Scaling is fitted
+inside the calibration folds. SVM scores can differ from older runs using
+`SVC(probability=True)`.
+
+Method and classifier curves show the number of recovered oncogenes by default;
+use `plot_benchmarks.py --recovery-scale fraction` for fractions. Their legends
+report normalized **rank-recovery area**, not ROC AUC. The ablation dots report
+the same rank-recovery area on a zoomed axis, with the all-assay score marked
+as a dashed reference. Metric-summary panels also use separate scales fitted
+to their observed values. Plots use Matplotlib's bundled seaborn white-grid theme.
+
+`pr` runs stratified cross-validation and saves one out-of-fold score per gene
+and method, with its label and fold. PR/ROC and their AP/AUC summaries use these
+pooled scores; they evaluate the classifier, separately from the repeated
+positive–unlabeled ranking procedure. Without `--negative-label-file`, class zero
+means **unlabeled**, not a confirmed non-oncogene. In that case precision and AP
+measure known-label recovery, and ROC measures separation of known oncogenes from
+unlabeled genes. They do not estimate biological precision or specificity.
+The PR reference line is the known-positive prevalence in the evaluated set.
+The displayed precision axis fits the values at evaluated thresholds; the
+conventional extra `(recall=0, precision=1)` endpoint is omitted and noted on
+the figure. This does not alter saved curves, predictions, or AP calculations.
+Supply explicit negative labels for a control-based evaluation, or use `labeled`,
+which requires them and writes the same outputs. Do not select both `pr` and `labeled`.
+
+Model comparison and ablation are opt-in because they rerun LOOCV many times:
+approximately `(number of methods + number of models + 16) × positive genes ×
+loocv-trials` model fits for the full suite. Use small fixtures and fewer trials
+for a pipeline check; use adequate trials for the paper results. Plotting alone
+never fits models and exports both 300-dpi PNG and PDF with embedded TrueType fonts.
 
 For a custom run, pass the same `--feature-dir`, `--results-dir`, and
 `--label-name` to prediction and benchmarking, and the matching `--results-dir`

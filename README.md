@@ -218,12 +218,15 @@ The oncogene workflow has four entry points in `scripts/oncogene/`:
 | --- | --- |
 | `make_features.py` | Build PDM and scalar feature tables |
 | `run_predictions.py` | Write candidate rankings |
-| `run_benchmarks.py` | Write KS diagnostics, LOOCV, or labeled-evaluation CSVs |
+| `run_benchmarks.py` | Write KS, recovery, ablation, and cross-validation CSVs |
 | `plot_benchmarks.py` | Read saved CSVs and export PNG/PDF figures |
 
 Benchmarking and plotting are separate, explicit steps; the oncogene
 `reproduce.py` workflow runs feature generation and prediction only.
 The fixture run exercises the pipeline without reproducing study results.
+Paper figures include method and classifier rank-recovery curves, assay ablation,
+and cross-validated PR/ROC curves. See the [paper figure commands](REPRODUCE.md#paper-figure-suite)
+for evaluation settings and the distinction between unlabeled genes and negative controls.
 
 The Python recipes live in `pdm_learn.workflows.oncogene` and
 `pdm_learn.workflows.ppi`; their DepMap specifications live in

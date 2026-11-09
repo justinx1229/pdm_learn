@@ -1,5 +1,6 @@
 import sys
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pdm_learn.modeling import (
+    _fit_classifier,
     evaluate_labeled_features,
     feature_ks_pvalues,
     loocv_rank_recovery,
@@ -28,6 +30,37 @@ class ModelingTests(unittest.TestCase):
             }
         )
         self.labels = {"A", "B", "C"}
+
+    def test_svm_calibration_adapts_to_training_size_without_deprecated_probability(self):
+        for count in (2, 6):
+            with self.subTest(count=count), warnings.catch_warnings():
+                warnings.simplefilter("error", FutureWarning)
+                values = np.arange(count * 2).reshape(-1, 1)
+                labels = np.repeat([0, 1], count)
+                classifier = _fit_classifier("svm", 7, values, labels)
+                self.assertEqual(classifier.cv.n_splits, min(5, count))
+                self.assertFalse(classifier.ensemble)
+                scores = classifier.predict_proba(values)
+                self.assertTrue(np.isfinite(scores).all())
+                np.testing.assert_allclose(scores.sum(axis=1), 1)
+                repeated = _fit_classifier("svm", 7, values, labels)
+                np.testing.assert_allclose(scores, repeated.predict_proba(values))
+        with self.assertRaisesRegex(ValueError, "two training rows per class"):
+            _fit_classifier("svm", 7, np.array([[0], [1]]), np.array([0, 1]))
+
+    def test_svm_ranking_and_evaluation_support_small_training_sets(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            ranking = rank_candidates(self.table, self.labels, model="svm", trials=20)
+            curve, ranks = loocv_rank_recovery(self.table, self.labels, model="svm", trials=20)
+            summary, predictions = evaluate_labeled_features(
+                self.table, self.labels, model="svm", n_splits=3, return_predictions=True
+            )
+        self.assertTrue(ranking.score.between(0, 1).all())
+        self.assertEqual(len(ranks), 3)
+        self.assertEqual(curve.recovered_positives.iloc[-1], 3)
+        self.assertTrue(np.isfinite(summary.roc_auc).all())
+        self.assertTrue(predictions.score.between(0, 1).all())
 
     def test_feature_selection_prefers_separating_columns(self) -> None:
         positive = np.asarray([[1.0, 0.1], [1.2, 0.2], [0.9, 0.3]])
@@ -294,6 +327,48 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(result["negative_rows"].tolist(), [3])
         self.assertEqual(result["cv_strategy"].tolist(), ["stratified_group_kfold"])
         self.assertTrue(np.isfinite(result["roc_auc"]).all())
+
+    def test_exported_predictions_and_feature_selection_are_out_of_fold(self) -> None:
+        table = pd.DataFrame({"gene": list("ABCDEFGH"), "row": range(8)})
+        training_sets, scoring_sets = [], []
+        test = self
+
+        def select(positive, negative, **kwargs):
+            training_sets.append(set(np.r_[positive[:, 0], negative[:, 0]]))
+            return np.array([0])
+
+        class RecordingClassifier:
+            classes_ = np.array([0, 1])
+
+            def fit(self, values, labels):
+                self.training = set(values[:, 0])
+                test.assertEqual(self.training, training_sets[-1])
+                return self
+
+            def predict_proba(self, values):
+                scoring_sets.append(set(values[:, 0]))
+                test.assertFalse(self.training & scoring_sets[-1])
+                scores = values[:, 0] / 8
+                return np.column_stack([1 - scores, scores])
+
+        with (
+            patch("pdm_learn.modeling.select_features", side_effect=select),
+            patch("pdm_learn.modeling._build_classifier",
+                  side_effect=lambda *a: RecordingClassifier()),
+        ):
+            summary, predicted = evaluate_labeled_features(
+                table, {"A", "B", "C"}, negative_labels={"D", "E", "F"},
+                n_splits=3, feature_selection=True, return_predictions=True,
+            )
+        self.assertEqual(predicted.entity.tolist(), list("ABCDEF"))
+        np.testing.assert_allclose(predicted.score, np.arange(6) / 8)
+        self.assertEqual(predicted.target.tolist(), [1, 1, 1, 0, 0, 0])
+        for fold in range(3):
+            scored = set(predicted.loc[predicted.fold == fold, "score"] * 8)
+            self.assertEqual(scored, scoring_sets[fold])
+        self.assertEqual(summary.roc_auc.iloc[0], 0)
+        with self.assertRaisesRegex(ValueError, "at least two valid folds"):
+            evaluate_labeled_features(table, {"A"}, return_predictions=True)
 
     def test_evaluation_rejects_duplicates_without_consistent_groups(self) -> None:
         for duplicate_id in ("F", " F "):

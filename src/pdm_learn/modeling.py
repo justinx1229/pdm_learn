@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
@@ -142,9 +143,26 @@ def _build_classifier(model: str, random_state: int):
     if model == "gradient_boosting":
         return GradientBoostingClassifier(random_state=random_state)
     if model == "svm":
-        return make_pipeline(StandardScaler(), SVC(probability=True, random_state=random_state))
+        return CalibratedClassifierCV(
+            make_pipeline(StandardScaler(), SVC(random_state=random_state)), ensemble=False
+        )
     allowed = ", ".join(MODEL_NAMES)
     raise ValueError(f"Unsupported model {model!r}; choose one of: {allowed}.")
+
+
+def _fit_classifier(model: str, random_state: int, values: np.ndarray, labels: np.ndarray):
+    classifier = _build_classifier(model, random_state)
+    if model == "svm":
+        folds = min(5, int(np.bincount(labels, minlength=2).min()))
+        if folds < 2:
+            raise ValueError(
+                "SVM calibration requires at least two training rows per class; "
+                "provide more labeled rows or choose another model."
+            )
+        classifier.set_params(
+            cv=StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+        )
+    return classifier.fit(values, labels)
 
 
 def _positive_scores(classifier, values: np.ndarray) -> np.ndarray:
@@ -276,7 +294,7 @@ def rank_candidates(
         train_labels = np.concatenate(
             [np.ones(sample_size, dtype=int), np.zeros(sample_size, dtype=int)]
         )
-        classifier = _build_classifier(model, random_state + trial).fit(train_values, train_labels)
+        classifier = _fit_classifier(model, random_state + trial, train_values, train_labels)
         scores[held_out_index] += _positive_scores(
             classifier, candidate_values[held_out_index][:, selected]
         )
@@ -414,7 +432,8 @@ def evaluate_labeled_features(
     feature_selection: bool = False,
     n_features: int | None = None,
     random_state: int = 42,
-) -> pd.DataFrame:
+    return_predictions: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Cross-validate one or more labeled feature tables.
 
     Returns ROC AUC and average precision for each table. When
@@ -425,6 +444,9 @@ def evaluate_labeled_features(
     ignored by default; pass ``feature_columns`` to select features
     explicitly, especially for pair-table data. After feature and label
     filtering, duplicate normalized IDs require a single shared group per ID.
+    With ``return_predictions=True``, also return an out-of-fold table with
+    ``method``, ``entity``, ``target``, ``score``, and zero-based ``fold`` columns.
+    This requires at least two valid folds for every table.
     """
     positive_label_set = _normalize_labels(positive_labels)
     negative_label_set = (
@@ -439,6 +461,7 @@ def evaluate_labeled_features(
         else dict(feature_tables)
     )
     rows: list[dict[str, object]] = []
+    predictions: list[pd.DataFrame] = []
     for name, table in tables.items():
         selected_columns = (
             feature_columns.get(name) if isinstance(feature_columns, Mapping) else feature_columns
@@ -497,6 +520,7 @@ def evaluate_labeled_features(
             folds = min(folds, len(positive_groups), len(negative_groups))
         if folds >= 2:
             scores = np.empty(len(values), dtype=float)
+            fold_ids = np.empty(len(values), dtype=int)
             splitter = (
                 StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=random_state)
                 if group_values is not None
@@ -522,13 +546,23 @@ def evaluate_labeled_features(
                     )
                 else:
                     selected = np.arange(values.shape[1])
-                classifier = _build_classifier(model, random_state + fold).fit(
-                    train_values[:, selected], train_labels
+                classifier = _fit_classifier(
+                    model, random_state + fold, train_values[:, selected], train_labels
                 )
                 scores[test_index] = _positive_scores(classifier, test_values[:, selected])
+                fold_ids[test_index] = fold
             row["roc_auc"] = float(roc_auc_score(targets, scores))
             row["average_precision"] = float(average_precision_score(targets, scores))
+            if return_predictions:
+                predictions.append(pd.DataFrame({
+                    "method": str(name), "entity": identifiers, "target": targets,
+                    "score": scores, "fold": fold_ids,
+                }))
+        elif return_predictions:
+            raise ValueError("Out-of-fold predictions require at least two valid folds.")
         rows.append(row)
+    if return_predictions:
+        return pd.DataFrame(rows), pd.concat(predictions, ignore_index=True)
     return pd.DataFrame(rows)
 
 
