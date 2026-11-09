@@ -16,8 +16,9 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from tqdm.auto import tqdm
+from xgboost import XGBClassifier
 
-MODEL_NAMES = ("logistic_regression", "random_forest", "gradient_boosting", "svm")
+MODEL_NAMES = ("logistic_regression", "random_forest", "gradient_boosting", "svm", "xgboost")
 """Classifier names accepted by the public ranking and evaluation functions."""
 
 
@@ -142,6 +143,10 @@ def _build_classifier(model: str, random_state: int):
         return RandomForestClassifier(n_estimators=300, random_state=random_state, n_jobs=1)
     if model == "gradient_boosting":
         return GradientBoostingClassifier(random_state=random_state)
+    if model == "xgboost":
+        return XGBClassifier(
+            tree_method="hist", eval_metric="logloss", random_state=random_state, n_jobs=1
+        )
     if model == "svm":
         return CalibratedClassifierCV(
             make_pipeline(StandardScaler(), SVC(random_state=random_state)), ensemble=False

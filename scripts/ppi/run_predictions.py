@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--results-dir", type=Path, default=PROJECT_ROOT / "runs" / "ppi" / "results"
     )
-    parser.add_argument("--model", choices=MODEL_NAMES, default="gradient_boosting")
+    parser.add_argument("--model", choices=MODEL_NAMES, default="xgboost")
     parser.add_argument("--trials", type=int, default=100)
     parser.add_argument(
         "--max-pairs-per-complex", type=int, default=10,

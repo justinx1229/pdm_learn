@@ -1,12 +1,12 @@
 {
   "oncogene": {
-    "model": "gradient_boosting",
+    "model": "xgboost",
     "ranking_trials": 100,
     "n_splits": 5,
     "random_state": 42
   },
   "ppi": {
-    "model": "gradient_boosting",
+    "model": "xgboost",
     "trials": 100,
     "ranking_max_pairs_per_complex": 10,
     "n_splits": 5,
@@ -16,7 +16,7 @@
     "random_state": 42
   },
   "simulation": {
-    "model": "gradient_boosting",
+    "model": "xgboost",
     "epsilon_std": 2.0,
     "positive_repeats": 25,
     "negative_repeats": 200,

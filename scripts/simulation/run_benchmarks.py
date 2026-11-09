@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--results-dir", type=Path, default=PROJECT_ROOT / "runs" / "simulation" / "results"
     )
-    parser.add_argument("--model", choices=MODEL_NAMES, default="gradient_boosting")
+    parser.add_argument("--model", choices=MODEL_NAMES, default="xgboost")
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
     parser.add_argument("--models", nargs="+", choices=MODEL_NAMES,
                         help="Also compare these classifiers using PDM features.")

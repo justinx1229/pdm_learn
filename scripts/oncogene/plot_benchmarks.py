@@ -32,7 +32,7 @@ plt.rcParams.update({
 COLORS = {"PDM": "#0072B2", "Pearson": "#E69F00", "Spearman": "#009E73",
           "MutualInfo": "#D55E00", "Bicor": "#CC79A7"}
 MODEL_NAMES = {"logistic_regression": "Logistic regression", "random_forest": "Random forest",
-               "gradient_boosting": "Gradient boosting", "svm": "SVM"}
+               "gradient_boosting": "Gradient boosting", "svm": "SVM", "xgboost": "XGBoost"}
 LINESTYLES = ("-", "--", "-.", ":", (0, (3, 1, 1, 1)))
 
 

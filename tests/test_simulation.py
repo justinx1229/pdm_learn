@@ -102,8 +102,8 @@ def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_
                           "--positive-repeats", 1, "--negative-repeats", 3)
     run_simulation_script(
         "run_benchmarks.py", "--feature-dir", features, "--results-dir", results,
-        "--model", "logistic_regression", "--n-splits", 2, "--models",
-        "logistic_regression", "random_forest", "gradient_boosting", "svm",
+        "--n-splits", 2, "--models",
+        "logistic_regression", "random_forest", "gradient_boosting", "svm", "xgboost",
     )
     assert {path.name for path in results.iterdir()} == {
         f"simulation_{prefix}{suffix}.csv" for prefix in ("", "model_")
@@ -115,7 +115,7 @@ def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_
         assert not predicted.duplicated([group, "entity"]).any()
         assert predicted.groupby("entity").fold.nunique().eq(1).all()
         assert predicted.groupby(group).size().eq(16).all()
-        assert len(summary) == (5 if group == "method" else 4)
+        assert len(summary) == 5
         assert summary.positive_rows.eq(4).all() and summary.negative_rows.eq(12).all()
         for name, rows in predicted.groupby(group):
             assert summary.loc[name, "roc_auc"] == pytest.approx(
@@ -126,9 +126,10 @@ def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_
             )
     methods = pd.read_csv(results / "simulation_cv_predictions.csv")
     models = pd.read_csv(results / "simulation_model_cv_predictions.csv")
+    assert methods.model.eq("xgboost").all()
     pd.testing.assert_frame_equal(
         methods.loc[methods.method == "PDM"].reset_index(drop=True),
-        models.loc[models.model == "logistic_regression"].reset_index(drop=True),
+        models.loc[models.model == "xgboost"].reset_index(drop=True),
         check_dtype=False,  # Scalar methods leave n_features blank in the combined CSV.
     )
     before = {path.name: path.read_bytes() for path in results.iterdir()}

@@ -29,9 +29,10 @@ NAMES = {
     "PDM": "PDM", "PEARSON": "Pearson", "SPEARMAN": "Spearman", "MI": "Mutual information",
     "BICOR": "Bicor", "logistic_regression": "Logistic regression",
     "random_forest": "Random forest", "gradient_boosting": "Gradient boosting", "svm": "SVM",
+    "xgboost": "XGBoost",
 }
 PALETTE = ("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7")
-COLORS = dict(zip(NAMES, (*PALETTE, *PALETTE[:4]), strict=True))
+COLORS = dict(zip(NAMES, (*PALETTE, *PALETTE), strict=True))
 LINESTYLES = ("-", "--", "-.", ":", (0, (3, 1, 1, 1)))
 
 

@@ -171,7 +171,8 @@ true positive status. Candidates never scored have a missing score and zero
 `score_trials`; increasing `trials` improves coverage.
 
 Available models are `logistic_regression` (the core API default),
-`random_forest`, `gradient_boosting`, and `svm`. Ranking selects features using
+`random_forest`, `gradient_boosting`, `svm`, and `xgboost`. Benchmark and prediction
+scripts and reproduction workflows default to `xgboost`. Ranking selects features using
 KS-test p-values within each trial by default. `positive_groups` together with
 `max_positive_per_group` enables capped positive sampling by group.
 

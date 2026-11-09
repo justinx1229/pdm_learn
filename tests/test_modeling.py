@@ -72,6 +72,29 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(pvalues.shape, (2,))
         self.assertEqual(selected.tolist(), [0])
 
+    def test_xgboost_ranking_and_evaluation_are_reproducible(self):
+        table = pd.DataFrame({
+            "entity": [f"id{i}" for i in range(60)],
+            "signal": np.repeat([1., 0.], [20, 40]),
+        })
+        labels = set(table.entity[:20])
+        ranking = rank_candidates(table, labels, model="xgboost", trials=10)
+        self.assertTrue(ranking.score.between(0, 1).all())
+        pd.testing.assert_frame_equal(
+            ranking, rank_candidates(table, labels, model="xgboost", trials=10)
+        )
+        summary, predicted = evaluate_labeled_features(
+            table, labels, model="xgboost", n_splits=3, return_predictions=True
+        )
+        self.assertGreater(summary.roc_auc.iloc[0], 0.9)
+        self.assertTrue(predicted.score.between(0, 1).all())
+        self.assertFalse(predicted.entity.duplicated().any())
+        curve, ranks = loocv_rank_recovery(
+            self.table, self.labels, model="xgboost", trials=10
+        )
+        self.assertEqual(len(ranks), 3)
+        self.assertEqual(curve.recovered_positives.iloc[-1], 3)
+
     def test_ranking_ignores_non_numeric_metadata(self) -> None:
         ranking = rank_candidates(self.table, self.labels, trials=20, random_state=7)
 

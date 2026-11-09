@@ -283,7 +283,7 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help="Comma-separated methods, or all; also define the shared gene set. KS uses full PDM.",
     )
-    parser.add_argument("--model", choices=MODEL_NAMES, default="gradient_boosting")
+    parser.add_argument("--model", choices=MODEL_NAMES, default="xgboost")
     parser.add_argument("--models", nargs="+", choices=MODEL_NAMES, default=list(MODEL_NAMES),
                         help="Classifiers for the models benchmark (PDM features only).")
     parser.add_argument("--loocv-trials", type=int, default=25)

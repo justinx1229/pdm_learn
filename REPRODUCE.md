@@ -196,9 +196,9 @@ full PDM table. Feature selection stays inside each training trial or fold.
 | `ablation` | `ablation.csv`, `ablation_held_out_ranks.csv` | Assay inclusion matrix with recovery-area dots |
 | `pr` or `labeled` | `cv_predictions.csv`, `pr_curve.csv`, `roc_curve.csv`, `method_benchmarks.csv` | PR, ROC, and metric summary |
 
-`models` uses the four supported classifiers: logistic regression, random forest,
-gradient boosting, and SVM. Select a subset with `--models gradient_boosting svm`.
-The other benchmarks use `--model` (default: gradient boosting). Model summaries
+`models` uses the five supported classifiers: logistic regression, random forest,
+gradient boosting, SVM, and XGBoost. Select a subset with `--models xgboost svm`.
+The other benchmarks use `--model` (default: XGBoost). Model summaries
 also record elapsed seconds. `ablation` uses PDM and evaluates all five assays,
 each single omission, and each pair of omissions: 16 combinations total. Removing
 an assay removes every feature pair involving it, while keeping the gene set fixed.
@@ -268,12 +268,12 @@ To also compare classifiers on PDM features:
 
 ```bash
 uv run python scripts/simulation/run_benchmarks.py \
-  --models logistic_regression random_forest gradient_boosting svm
+  --models logistic_regression random_forest gradient_boosting svm xgboost
 uv run python scripts/simulation/plot_benchmarks.py
 ```
 
 This adds corresponding `simulation_model_*.csv` files and three classifier
-figures. `--model` selects the classifier for feature-method comparisons;
+figures. `--model` selects the classifier for feature-method comparisons (default: XGBoost);
 `--methods pdm pearson` selects feature methods. Existing fold count, feature
 selection, and random-seed options remain available. Use `--feature-dir` and
 `--results-dir` for another run; plotting accepts `--results-dir`, `--output-dir`,

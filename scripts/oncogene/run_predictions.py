@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
         "--results-dir", type=Path, default=PROJECT_ROOT / "runs" / "oncogene" / "results"
     )
     parser.add_argument("--density-name", default="dataset_trimmed_package.csv")
-    parser.add_argument("--model", choices=MODEL_NAMES, default="gradient_boosting")
+    parser.add_argument("--model", choices=MODEL_NAMES, default="xgboost")
     parser.add_argument("--ranking-trials", type=int, default=100)
     parser.add_argument("--features-left", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=42)
