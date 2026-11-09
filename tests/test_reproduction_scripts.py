@@ -65,6 +65,19 @@ class ReproductionScriptTests(unittest.TestCase):
                 script.main()
             run.assert_called_once()
 
+    def test_simulation_forwards_noise_sweep_from_cli(self) -> None:
+        script = _reproduction_script()
+        argv = ["reproduce.py", "simulation", "--epsilon-std", "0.5", "1", "2"]
+        with patch.object(sys, "argv", argv), patch.object(script, "run_simulation") as run:
+            script.main()
+        settings = run.call_args.args[1]
+        self.assertEqual(settings["epsilon_std"], [0.5, 1.0, 2.0])
+        with patch.object(script, "_run") as execute:
+            script.run_simulation(Path("unused"), settings)
+        command = execute.call_args_list[0].args[0]
+        index = command.index("--epsilon-std")
+        self.assertEqual(command[index + 1:index + 4], ["0.5", "1.0", "2.0"])
+
     def test_ppi_uses_explicit_inputs_even_when_default_files_exist(self) -> None:
         script = _reproduction_script()
         with tempfile.TemporaryDirectory() as directory:

@@ -228,6 +228,12 @@ Paper figures include method and classifier rank-recovery curves, assay ablation
 and cross-validated PR/ROC curves. See the [paper figure commands](REPRODUCE.md#paper-figure-suite)
 for evaluation settings and the distinction between unlabeled genes and negative controls.
 
+Simulation has its own `scripts/simulation/plot_benchmarks.py`, which plots saved
+cross-validation summaries and ROC/PR curves for methods and optional PDM classifier
+comparisons. See [simulation figure commands](REPRODUCE.md#simulation-benchmarks-and-figures).
+Pass `--epsilon-std 0.5 1 2 3` to simulation feature generation or reproduction
+to compare performance across noise levels in combined plots.
+
 The Python recipes live in `pdm_learn.workflows.oncogene` and
 `pdm_learn.workflows.ppi`; their DepMap specifications live in
 `pdm_learn.presets`. For other domains, use the core API directly.

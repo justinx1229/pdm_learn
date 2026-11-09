@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", type=Path, default=PROJECT_ROOT / "runs" / "simulation" / "features"
     )
-    parser.add_argument("--epsilon-std", type=float, default=3.0)
+    parser.add_argument("--epsilon-std", type=float, nargs="+", default=[2.0],
+                        help="One or more noise standard deviations.")
     parser.add_argument(
         "--positive-repeats",
         type=int,
@@ -99,23 +101,20 @@ def _scalar_features(
         ).to_csv(prefix / f"{name}.csv", index=False)
 
 
-def main() -> None:
-    args = parse_args()
-    if args.positive_repeats < 1:
-        raise ValueError("positive_repeats must be a positive integer.")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+def make_features(args, epsilon, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
     seed_pairs = build_positive_base()
     positive = collect_simulated_pairs(
         seed_pairs,
         repeats=args.positive_repeats,
-        noise_scale=args.epsilon_std,
+        noise_scale=epsilon,
         centers=np.linspace(-2, 2, 7),
         rng=np.random.default_rng(args.seed),
     )
     negative = collect_simulated_pairs(
         seed_pairs,
         repeats=args.positive_repeats * args.negative_repeats,
-        noise_scale=args.epsilon_std,
+        noise_scale=epsilon,
         shuffle_y=True,
         centers=np.linspace(-2, 2, 7),
         rng=np.random.default_rng(args.seed + 1),
@@ -127,13 +126,13 @@ def main() -> None:
         ("negative", negative, args.positive_repeats * args.negative_repeats),
     )
     for label, pairs, repeats in collections:
-        directory = args.output_dir / label
+        directory = output_dir / label
         directory.mkdir(exist_ok=True)
         build_density_dataset(
             seed_pairs,
             centers=centers,
             repeats=repeats,
-            noise_scale=args.epsilon_std,
+            noise_scale=epsilon,
             sigma=0.1,
             simulated_pairs=pairs,
         ).to_csv(directory / "pdm.csv", index=False)
@@ -141,11 +140,28 @@ def main() -> None:
             seed_pairs,
             pairs,
             repeats=repeats,
-            noise_scale=args.epsilon_std,
+            noise_scale=epsilon,
             centers=centers,
             prefix=directory,
         )
-    print(f"simulation features: {args.output_dir}")
+    print(f"simulation features (epsilon std={epsilon:g}): {output_dir}", flush=True)
+
+
+def main() -> None:
+    args = parse_args()
+    if args.positive_repeats < 1 or args.negative_repeats < 1:
+        raise ValueError("positive_repeats and negative_repeats must be positive integers.")
+    epsilons = sorted(set(args.epsilon_std))
+    if any(not np.isfinite(value) or value < 0 for value in epsilons):
+        raise ValueError("epsilon-std values must be finite and non-negative.")
+    for epsilon in epsilons:
+        directory = args.output_dir / f"epsilon_{epsilon}" if len(epsilons) > 1 else args.output_dir
+        # Reuse random draws and permutations across noise levels for a paired comparison.
+        make_features(args, epsilon, directory)
+    manifest = {"epsilon_stds": epsilons, "seed": args.seed,
+                "positive_repeats": args.positive_repeats,
+                "negative_repeats": args.negative_repeats}
+    (args.output_dir / "simulation_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 if __name__ == "__main__":

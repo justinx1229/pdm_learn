@@ -17,6 +17,7 @@
   },
   "simulation": {
     "model": "gradient_boosting",
+    "epsilon_std": 2.0,
     "positive_repeats": 25,
     "negative_repeats": 200,
     "n_splits": 5,

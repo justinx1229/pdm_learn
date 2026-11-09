@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "runs")
+    parser.add_argument("--epsilon-std", type=float, nargs="+",
+                        help="Simulation noise standard deviations (overrides config).")
     parser.add_argument(
         "--config",
         type=Path,
@@ -193,12 +195,17 @@ def run_ppi(
 def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
     features = output_dir / "simulation" / "features"
     results = output_dir / "simulation" / "results"
+    epsilons = settings.get("epsilon_std", 2.0)
+    if not isinstance(epsilons, list):
+        epsilons = [epsilons]
     _run(
         [
             sys.executable,
             str(PROJECT_ROOT / "scripts" / "simulation" / "make_features.py"),
             "--output-dir",
             str(features),
+            "--epsilon-std",
+            *map(str, epsilons),
             "--positive-repeats",
             str(settings["positive_repeats"]),
             "--negative-repeats",
@@ -230,6 +237,8 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
 def main() -> None:
     args = parse_args()
     settings = json.loads(args.config.read_text())
+    if args.epsilon_std is not None:
+        settings["simulation"]["epsilon_std"] = args.epsilon_std
     matrix_args = tuple(
         value
         for name in ("expression", "copy_number", "shrna", "mutation", "crispr")

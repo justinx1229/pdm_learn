@@ -246,6 +246,92 @@ To add a benchmark, write a function in `run_benchmarks.py` returning
 write a function in `plot_benchmarks.py` and add its input suffix, output suffix,
 and function to `PLOTS`. The existing CLI and output loops handle the rest.
 
+## Simulation benchmarks and figures
+
+Simulation evaluates noisy associations against shuffled controls using stratified
+cross-validation. It compares PDM, Pearson, Spearman, mutual information, and bicor:
+
+```bash
+uv run python scripts/simulation/make_features.py
+uv run python scripts/simulation/run_benchmarks.py
+uv run python scripts/simulation/plot_benchmarks.py
+```
+
+The default directories are `runs/simulation/features/` and
+`runs/simulation/results/`. Benchmarking writes `simulation_benchmarks.csv`,
+`simulation_cv_predictions.csv`, `simulation_roc_curve.csv`, and
+`simulation_pr_curve.csv`. Plotting reads those CSVs and exports a metric summary,
+ROC, and PR as PNG/PDF files under `RESULTS_DIR/figures/`. It never fits models.
+`reproduce.py simulation` generates features and benchmarks; plotting is a separate step.
+
+To also compare classifiers on PDM features:
+
+```bash
+uv run python scripts/simulation/run_benchmarks.py \
+  --models logistic_regression random_forest gradient_boosting svm
+uv run python scripts/simulation/plot_benchmarks.py
+```
+
+This adds corresponding `simulation_model_*.csv` files and three classifier
+figures. `--model` selects the classifier for feature-method comparisons;
+`--methods pdm pearson` selects feature methods. Existing fold count, feature
+selection, and random-seed options remain available. Use `--feature-dir` and
+`--results-dir` for another run; plotting accepts `--results-dir`, `--output-dir`,
+and `--plots summary roc pr models model-roc model-pr` (default: all available).
+
+Feature CSVs must come from the same generation run: rows correspond by position.
+The benchmark requires matching positive/negative row counts and keeps only rows
+finite across all selected methods. Every method and classifier uses the same
+fold assignments. PDM feature selection uses training rows only. AUC and AP use
+pooled out-of-fold scores, also saved with simulation IDs, targets, and fold IDs.
+
+These evaluate supervised classification of new realizations of the four seed
+patterns, not unseen pattern families or the transductive ranking procedure.
+Shuffled controls supply the negative class; the PR baseline reflects the chosen
+positive/control ratio. Metric and precision axes adapt to observed values;
+the conventional PR `(0, 1)` endpoint is omitted from display, without changing AP.
+Assay ablation and oncogene rank-recovery plots are not part of this workflow.
+
+### Compare noise levels
+
+Pass several standard deviations to feature generation; benchmarking and plotting
+automatically read the resulting sweep:
+
+```bash
+uv run python scripts/simulation/make_features.py --epsilon-std 0.5 1 2 3
+uv run python scripts/simulation/run_benchmarks.py
+uv run python scripts/simulation/plot_benchmarks.py
+```
+
+`simulation_benchmarks.png/.pdf` now shows ROC AUC and average precision versus
+noise, with one line per feature method. ROC and PR figures show one panel per
+noise level. Optional `--models ...` comparisons get the same combined views.
+The CSVs retain their filenames and include `epsilon_std` to distinguish levels;
+predictions and ROC/PR curves are evaluated separately at each level.
+
+Generation writes `epsilon_<value>/positive/` and `epsilon_<value>/negative/`
+under the feature directory, plus `simulation_manifest.json` identifying the
+levels and generation settings. The benchmark uses only levels in that manifest.
+One standard deviation retains the original flat directory layout, and older
+single-level feature directories without a manifest remain supported.
+
+Random draws and control permutations are reused across levels. Benchmarking
+retains the same complete simulation rows across all levels and methods, with
+identical folds, so changes in noise can be compared directly. The lines summarize
+one seeded experiment, not repeated-run uncertainty estimates.
+
+The reproduction entry point also accepts the list:
+
+```bash
+uv run python scripts/reproduce.py simulation --epsilon-std 0.5 1 2 3
+uv run python scripts/simulation/plot_benchmarks.py
+```
+
+Alternatively, set `simulation.epsilon_std` in the workflow JSON to a number or
+list. The default remains `2.0`; values must be finite and non-negative.
+
+## PPI benchmark interpretation
+
 PPI benchmarks hold out cancer-complex groups, joining complexes that share
 curated positive pairs into one group to prevent overlap across folds.
 Their sampled negative pairs are exclusion-based controls, not confirmed
