@@ -20,6 +20,7 @@
     "epsilon_std": 2.0,
     "positive_repeats": 25,
     "negative_repeats": 200,
+    "loocv_trials": 25,
     "n_splits": 5,
     "random_state": 42
   }

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.metrics import average_precision_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -96,20 +96,41 @@ def run_simulation_script(name, *args, check=True):
     )
 
 
+def check_recovery_results(results, prefix, group, positives, negatives):
+    summary = pd.read_csv(results / f"simulation_{prefix}benchmarks.csv")
+    curves = pd.read_csv(results / f"simulation_{prefix}loocv_curve.csv")
+    ranks = pd.read_csv(results / f"simulation_{prefix}loocv_held_out_ranks.csv")
+    keys = ["epsilon_std", group]
+    assert "roc_auc" not in summary
+    assert not ranks.duplicated([*keys, "simulation_id"]).any()
+    for key, rows in ranks.groupby(keys):
+        assert len(rows) == positives
+        assert rows.candidate_count.eq(negatives).all()
+        assert rows["rank"].between(0, negatives).all()
+        curve = curves.set_index(keys).sort_index().loc[key].sort_values("rank_threshold")
+        expected = [(rows["rank"] <= threshold).sum() for threshold in range(negatives + 1)]
+        np.testing.assert_array_equal(curve.recovered_positives, expected)
+        area = np.mean(expected) / positives
+        assert summary.set_index(keys).loc[key, "loocv_area"] == pytest.approx(area)
+        np.testing.assert_allclose(curve.loocv_area, area)
+
+
 def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_path):
     features, results = tmp_path / "features", tmp_path / "results"
     run_simulation_script("make_features.py", "--output-dir", features,
                           "--positive-repeats", 1, "--negative-repeats", 3)
     run_simulation_script(
         "run_benchmarks.py", "--feature-dir", features, "--results-dir", results,
-        "--n-splits", 2, "--models",
+        "--n-splits", 2, "--loocv-trials", 10, "--models",
         "logistic_regression", "random_forest", "gradient_boosting", "svm", "xgboost",
     )
     assert {path.name for path in results.iterdir()} == {
         f"simulation_{prefix}{suffix}.csv" for prefix in ("", "model_")
-        for suffix in ("benchmarks", "cv_predictions", "roc_curve", "pr_curve")
+        for suffix in ("benchmarks", "cv_predictions", "loocv_curve", "loocv_held_out_ranks",
+                       "pr_curve")
     }
     for prefix, group in (("", "method"), ("model_", "model")):
+        check_recovery_results(results, prefix, group, positives=4, negatives=12)
         summary = pd.read_csv(results / f"simulation_{prefix}benchmarks.csv").set_index(group)
         predicted = pd.read_csv(results / f"simulation_{prefix}cv_predictions.csv")
         assert not predicted.duplicated([group, "entity"]).any()
@@ -118,9 +139,6 @@ def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_
         assert len(summary) == 5
         assert summary.positive_rows.eq(4).all() and summary.negative_rows.eq(12).all()
         for name, rows in predicted.groupby(group):
-            assert summary.loc[name, "roc_auc"] == pytest.approx(
-                roc_auc_score(rows.target, rows.score)
-            )
             assert summary.loc[name, "average_precision"] == pytest.approx(
                 average_precision_score(rows.target, rows.score)
             )
@@ -137,7 +155,7 @@ def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_
     assert all((results / name).read_bytes() == content for name, content in before.items())
     assert {path.name for path in (results / "figures").iterdir()} == {
         f"simulation_{prefix}{suffix}.{extension}" for prefix in ("", "model_")
-        for suffix in ("benchmarks", "roc", "pr") for extension in ("png", "pdf")
+        for suffix in ("benchmarks", "loocv", "pr") for extension in ("png", "pdf")
     }
     assert all(path.stat().st_size > 0 for path in (results / "figures").iterdir())
 
@@ -194,9 +212,11 @@ def test_simulation_noise_sweep_keeps_levels_separate_and_folds_matched(tmp_path
     incomplete.to_csv(path, index=False)
     run_simulation_script("run_benchmarks.py", "--feature-dir", features,
                           "--results-dir", results, "--n-splits", 2,
+                          "--loocv-trials", 15,
                           "--model", "logistic_regression", "--models",
                           "logistic_regression", "gradient_boosting")
     for prefix, group in (("", "method"), ("model_", "model")):
+        check_recovery_results(results, prefix, group, positives=7, negatives=16)
         summary = pd.read_csv(results / f"simulation_{prefix}benchmarks.csv")
         predictions = pd.read_csv(results / f"simulation_{prefix}cv_predictions.csv")
         assert set(summary.epsilon_std) == {0, 0.5, 2}
@@ -207,13 +227,10 @@ def test_simulation_noise_sweep_keeps_levels_separate_and_folds_matched(tmp_path
         for key, rows in predictions.groupby(["epsilon_std", group]):
             assert len(rows) == 23
             assert "positive_0" not in set(rows.entity)
-            assert summary.loc[key, "roc_auc"] == pytest.approx(
-                roc_auc_score(rows.target, rows.score)
-            )
             assert summary.loc[key, "average_precision"] == pytest.approx(
                 average_precision_score(rows.target, rows.score)
             )
-        for suffix in ("pr_curve", "roc_curve"):
+        for suffix in ("pr_curve", "loocv_curve", "loocv_held_out_ranks"):
             curves = pd.read_csv(results / f"simulation_{prefix}{suffix}.csv")
             assert set(curves.epsilon_std) == {0, 0.5, 2}
     before = {path.name: path.read_bytes() for path in results.iterdir()}

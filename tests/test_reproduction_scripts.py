@@ -80,6 +80,7 @@ class ReproductionScriptTests(unittest.TestCase):
         self.assertEqual(command[index + 1:index + 4], ["0.5", "1.0", "2.0"])
         benchmark = execute.call_args_list[1].args[0]
         self.assertEqual(benchmark[benchmark.index("--model") + 1], "xgboost")
+        self.assertEqual(benchmark[benchmark.index("--loocv-trials") + 1], "25")
 
     def test_ppi_uses_explicit_inputs_even_when_default_files_exist(self) -> None:
         script = _reproduction_script()

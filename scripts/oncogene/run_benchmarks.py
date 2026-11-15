@@ -315,7 +315,13 @@ def main() -> None:
         count = len(next(iter(common.values())))
         print(f"Comparison tables: {', '.join(common)}; shared genes: {count}", flush=True)
     args.results_dir.mkdir(parents=True, exist_ok=True)
+    requested_features = args.features_left
     for name in dict.fromkeys(args.benchmarks):
+        args.features_left = requested_features
+        if requested_features is None and name in ("loocv", "models", "ablation"):
+            table = next(iter(common.values()))
+            positives = int(table.iloc[:, 0].isin(labels).sum())
+            args.features_left = 2 * min(positives - 1, len(table) - positives)
         inputs = tables if name == "ks" else common
         if name in ("loocv", "pr", "labeled"):
             inputs = {method: common[method] for method in selected_methods}

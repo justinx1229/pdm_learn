@@ -1,4 +1,4 @@
-"""Save cross-validated simulation benchmarks and curves; plotting is separate."""
+"""Save simulation LOOCV rank recovery and supervised PR results; plotting is separate."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import precision_recall_curve, roc_curve
+from sklearn.metrics import precision_recall_curve
 
-from pdm_learn.modeling import MODEL_NAMES, evaluate_labeled_features
+from pdm_learn.modeling import MODEL_NAMES, evaluate_labeled_features, loocv_rank_recovery
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 METHODS = ("pdm", "pearson", "spearman", "mi", "bicor")
@@ -28,8 +28,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
     parser.add_argument("--models", nargs="+", choices=MODEL_NAMES,
                         help="Also compare these classifiers using PDM features.")
-    parser.add_argument("--n-splits", type=int, default=5)
-    parser.add_argument("--features-left", type=int, default=48)
+    parser.add_argument("--n-splits", type=int, default=5, help="CV folds for PR/AP.")
+    parser.add_argument("--loocv-trials", type=int, default=25,
+                        help="Balanced ranking trials per held-out positive.")
+    parser.add_argument("--features-left", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
@@ -67,9 +69,9 @@ def load_tables(feature_dir, methods):
 
 
 def write_results(results, output_dir, prefix):
-    """Derive curves from the same held-out scores used for summary metrics."""
-    summaries, predictions, pr_curves, roc_curves = [], [], [], []
-    for summary, predicted in results:
+    """Save PR predictions and LOOCV ranks with their curves and summary metrics."""
+    summaries, predictions, pr_curves, recovery_curves, held_out_ranks = [], [], [], [], []
+    for summary, predicted, curve, ranks in results:
         columns = [column for column in ("method", "model", "epsilon_std") if column in summary]
         metadata = summary.iloc[0][columns].to_dict()
         precision, recall, thresholds = precision_recall_curve(predicted.target, predicted.score)
@@ -78,16 +80,14 @@ def write_results(results, output_dir, prefix):
             "average_precision": summary.average_precision.iloc[0],
             "prevalence": predicted.target.mean(),
         }).assign(**metadata))
-        fpr, tpr, thresholds = roc_curve(predicted.target, predicted.score)
-        roc_curves.append(pd.DataFrame({
-            "false_positive_rate": fpr, "true_positive_rate": tpr, "threshold": thresholds,
-            "roc_auc": summary.roc_auc.iloc[0],
-        }).assign(**metadata))
+        recovery_curves.append(curve)
+        held_out_ranks.append(ranks)
         summaries.append(summary)
         predictions.append(predicted)
     output_dir.mkdir(parents=True, exist_ok=True)
     for suffix, tables in {"benchmarks": summaries, "cv_predictions": predictions,
-                           "pr_curve": pr_curves, "roc_curve": roc_curves}.items():
+                           "pr_curve": pr_curves, "loocv_curve": recovery_curves,
+                           "loocv_held_out_ranks": held_out_ranks}.items():
         path = output_dir / f"simulation_{prefix}{suffix}.csv"
         pd.concat(tables, ignore_index=True).to_csv(path, index=False)
         print(f"simulation: {path}", flush=True)
@@ -95,6 +95,7 @@ def write_results(results, output_dir, prefix):
 
 def main() -> None:
     args = parse_args()
+    pr_features = 48 if args.features_left is None else args.features_left
     methods = list(dict.fromkeys(args.methods))
     needed = list(dict.fromkeys([*methods, *(["pdm"] if args.models else [])]))
     manifest_path = args.feature_dir / "simulation_manifest.json"
@@ -122,6 +123,9 @@ def main() -> None:
     for epsilon, tables, labels in datasets:
         tables = {name: table.set_index("simulation_id").loc[ids].reset_index()
                   for name, table in tables.items()}
+        positives = len(set(ids) & labels)
+        loocv_features = (2 * min(positives - 1, len(ids) - positives)
+                          if args.features_left is None else args.features_left)
         cache = {}
         for prefix, settings in comparisons.items():
             for method, model in settings:
@@ -131,17 +135,29 @@ def main() -> None:
                         tables[method], labels, model=model, n_splits=args.n_splits,
                         negative_labels=set(ids) - labels,
                         feature_selection=method == "pdm",
-                        n_features=args.features_left if method == "pdm" else None,
+                        n_features=pr_features if method == "pdm" else None,
                         random_state=args.random_state, return_predictions=True,
+                    )
+                    curve, ranks = loocv_rank_recovery(
+                        tables[method], labels, model=model, trials=args.loocv_trials,
+                        feature_selection=method == "pdm",
+                        n_features=loocv_features if method == "pdm" else None,
+                        random_state=args.random_state, progress=True,
+                    )
+                    summary = summary.drop(columns="roc_auc").assign(
+                        loocv_area=curve.loocv_area.iloc[0]
                     )
                     metadata = {"method": method.upper(), "model": model,
                                 "random_state": args.random_state,
                                 "n_splits": predicted.fold.nunique(),
-                                "n_features": args.features_left if method == "pdm" else None}
+                                "loocv_trials": args.loocv_trials,
+                                "pr_n_features": pr_features if method == "pdm" else None,
+                                "n_features": loocv_features if method == "pdm" else None}
                     if epsilon is not None:
                         metadata["epsilon_std"] = epsilon
                     cache[method, model] = (
-                        summary.assign(**metadata), predicted.assign(**metadata)
+                        summary.assign(**metadata), predicted.assign(**metadata),
+                        curve.assign(**metadata), ranks.assign(**metadata),
                     )
                 results[prefix].append(cache[method, model])
     for prefix, values in results.items():

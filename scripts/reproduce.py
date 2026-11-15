@@ -227,6 +227,8 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
             str(settings["model"]),
             "--n-splits",
             str(settings["n_splits"]),
+            "--loocv-trials",
+            str(settings.get("loocv_trials", 25)),
             "--random-state",
             str(settings["random_state"]),
         ],

@@ -230,7 +230,7 @@ and cross-validated PR/ROC curves. See the [paper figure commands](REPRODUCE.md#
 for evaluation settings and the distinction between unlabeled genes and negative controls.
 
 Simulation has its own `scripts/simulation/plot_benchmarks.py`, which plots saved
-cross-validation summaries and ROC/PR curves for methods and optional PDM classifier
+LOOCV rank-recovery summaries/curves and supervised PR curves for methods and optional PDM classifier
 comparisons. See [simulation figure commands](REPRODUCE.md#simulation-benchmarks-and-figures).
 Pass `--epsilon-std 0.5 1 2 3` to simulation feature generation or reproduction
 to compare performance across noise levels in combined plots.

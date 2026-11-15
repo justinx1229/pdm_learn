@@ -55,13 +55,16 @@ def _save(figure, output_path):
 
 
 def save_summary(table, output_path, *, group="method"):
-    metrics = ("roc_auc", "average_precision")
+    metrics = ("loocv_area", "average_precision")
     if table.empty or not np.isfinite(table[list(metrics)].to_numpy()).all():
         raise ValueError("Simulation summaries require nonempty, finite metrics.")
     sweep = "epsilon_std" in table and table.epsilon_std.nunique() > 1
     figure, axes = plt.subplots(1, 2, figsize=(8, 4.6 if sweep else 4), layout="constrained")
     labels = [NAMES.get(name, name) for name in table[group]]
-    for axis, metric, label in zip(axes, metrics, ("ROC AUC", "Average precision"), strict=True):
+    for axis, metric, label in zip(
+        axes, metrics, ("Normalized LOOCV recovery area", "Average precision (stratified CV)"),
+        strict=True,
+    ):
         if sweep:
             for index, (name, rows) in enumerate(table.groupby(group, sort=False)):
                 rows = rows.sort_values("epsilon_std")
@@ -106,9 +109,10 @@ def _draw_curve(table, axis, *, kind, group, show_metrics):
                       label=label)
         else:
             if show_metrics:
-                label += f" (AUC = {curve.roc_auc.iloc[0]:.3f})"
-            axis.plot(curve.false_positive_rate, curve.true_positive_rate, **options,
-                      label=label)
+                label += f" (area = {curve.loocv_area.iloc[0]:.3f})"
+            curve = curve.sort_values("rank_threshold")
+            axis.step(curve.rank_threshold, curve.recovered_positives, where="post",
+                      **options, label=label)
     if kind == "pr":
         prevalence = table.prevalence.iloc[0]
         if not np.allclose(table.prevalence, prevalence):
@@ -116,11 +120,13 @@ def _draw_curve(table, axis, *, kind, group, show_metrics):
         axis.axhline(prevalence, color="0.6", linestyle="--", linewidth=1,
                      label=f"Positive prevalence ({prevalence:.3g})")
         axis.set(xlabel="Recall", ylabel="Precision",
-                 ylim=_score_limits(table.precision, start_at_zero=True))
+                 xlim=(0, 1), ylim=_score_limits(table.precision, start_at_zero=True))
     else:
-        axis.plot([0, 1], [0, 1], color="0.6", linestyle="--", linewidth=1, label="Chance")
-        axis.set(xlabel="False positive rate", ylabel="True positive rate", ylim=(0, 1.02))
-    axis.set_xlim(0, 1)
+        axis.set(xlabel="Rank threshold (zero-based; lower is better)",
+                 ylabel="Held-out positives recovered",
+                 xlim=(0, table.rank_threshold.max()), ylim=(0, table.positive_rows.max() * 1.02))
+        axis.xaxis.set_major_locator(MaxNLocator(integer=True))
+        axis.yaxis.set_major_locator(MaxNLocator(integer=True))
 
 
 def save_curve(table, output_path, *, kind, group="method"):
@@ -138,7 +144,7 @@ def save_curve(table, output_path, *, kind, group="method"):
     for axis in list(axes.flat)[count:]:
         axis.set_axis_off()
     comparison = "PDM classifiers" if group == "model" else "feature methods"
-    title = "Precision–recall" if kind == "pr" else "ROC"
+    title = "Precision–recall (stratified CV)" if kind == "pr" else "LOOCV rank recovery"
     figure.suptitle(f"{title} · simulation {comparison}")
     note = "Conventional (recall=0, precision=1) endpoint omitted."
     if count == 1:
@@ -156,10 +162,10 @@ def save_curve(table, output_path, *, kind, group="method"):
 # Each plot reads one saved CSV; classifier plots reuse the same two functions.
 PLOTS = {
     "summary": ("benchmarks", save_summary),
-    "roc": ("roc_curve", partial(save_curve, kind="roc")),
+    "loocv": ("loocv_curve", partial(save_curve, kind="loocv")),
     "pr": ("pr_curve", partial(save_curve, kind="pr")),
     "models": ("model_benchmarks", partial(save_summary, group="model")),
-    "model-roc": ("model_roc_curve", partial(save_curve, kind="roc", group="model")),
+    "model-loocv": ("model_loocv_curve", partial(save_curve, kind="loocv", group="model")),
     "model-pr": ("model_pr_curve", partial(save_curve, kind="pr", group="model")),
 }
 

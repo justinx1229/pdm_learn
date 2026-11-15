@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pdm_learn.labels import load_label_set
@@ -47,6 +48,12 @@ def main() -> None:
     label_path = args.label_file or args.data_dir / "oncogene.txt"
     labels = load_label_set(label_path, header=None, labels=args.positive_extra)
     table = pd.read_csv(args.feature_dir / args.density_name)
+    if args.features_left is None:
+        ids = table.iloc[:, 0].astype("string").str.strip()
+        values = table.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+        ids = ids.loc[ids.notna() & ids.ne("") & np.isfinite(values).all(axis=1)]
+        positives = int(ids.isin(labels).sum())
+        args.features_left = 2 * min(positives, len(ids) - positives - 1)
 
     ranking = rank_candidates(
         table,

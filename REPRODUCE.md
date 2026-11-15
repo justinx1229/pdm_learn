@@ -248,8 +248,9 @@ and function to `PLOTS`. The existing CLI and output loops handle the rest.
 
 ## Simulation benchmarks and figures
 
-Simulation evaluates noisy associations against shuffled controls using stratified
-cross-validation. It compares PDM, Pearson, Spearman, mutual information, and bicor:
+Simulation evaluates noisy associations using transductive LOOCV rank recovery
+and supervised precision–recall against shuffled controls. It compares PDM,
+Pearson, Spearman, mutual information, and bicor:
 
 ```bash
 uv run python scripts/simulation/make_features.py
@@ -259,9 +260,12 @@ uv run python scripts/simulation/plot_benchmarks.py
 
 The default directories are `runs/simulation/features/` and
 `runs/simulation/results/`. Benchmarking writes `simulation_benchmarks.csv`,
-`simulation_cv_predictions.csv`, `simulation_roc_curve.csv`, and
+`simulation_cv_predictions.csv`, `simulation_loocv_curve.csv`,
+`simulation_loocv_held_out_ranks.csv`, and
 `simulation_pr_curve.csv`. Plotting reads those CSVs and exports a metric summary,
-ROC, and PR as PNG/PDF files under `RESULTS_DIR/figures/`. It never fits models.
+LOOCV recovery, and PR as PNG/PDF files under `RESULTS_DIR/figures/`. It never fits models.
+Rerun benchmarking to replace older ROC-based summaries; existing ROC files are
+obsolete and are ignored by the plotting script.
 `reproduce.py simulation` generates features and benchmarks; plotting is a separate step.
 
 To also compare classifiers on PDM features:
@@ -277,20 +281,29 @@ figures. `--model` selects the classifier for feature-method comparisons (defaul
 `--methods pdm pearson` selects feature methods. Existing fold count, feature
 selection, and random-seed options remain available. Use `--feature-dir` and
 `--results-dir` for another run; plotting accepts `--results-dir`, `--output-dir`,
-and `--plots summary roc pr models model-roc model-pr` (default: all available).
+and `--plots summary loocv pr models model-loocv model-pr` (default: all available).
 
 Feature CSVs must come from the same generation run: rows correspond by position.
 The benchmark requires matching positive/negative row counts and keeps only rows
 finite across all selected methods. Every method and classifier uses the same
-fold assignments. PDM feature selection uses training rows only. AUC and AP use
-pooled out-of-fold scores, also saved with simulation IDs, targets, and fold IDs.
+fold assignments and ranking seeds. PDM feature selection uses training rows only.
 
-These evaluate supervised classification of new realizations of the four seed
-patterns, not unseen pattern families or the transductive ranking procedure.
-Shuffled controls supply the negative class; the PR baseline reflects the chosen
+LOOCV withholds each positive association in turn and ranks it among shuffled
+controls using repeated balanced positive/unlabeled fits, as in the oncogene
+pipeline. Controls are treated as unlabeled candidates in this evaluation.
+`loocv_area` is the normalized cumulative recovery area, not ROC AUC. Higher
+values indicate earlier recovery. `--loocv-trials` controls fits per held-out
+positive (default: 25); increase it if any candidate receives no held-out score.
+This is more expensive than stratified CV: fits scale with positives × trials
+× methods × noise levels. Reproduction config uses `simulation.loocv_trials`.
+
+PR and AP still use pooled supervised out-of-fold scores, saved with simulation
+IDs, targets, and fold IDs; `--n-splits` controls these folds. Shuffled controls
+supply the negative class, and the PR baseline reflects the chosen
 positive/control ratio. Metric and precision axes adapt to observed values;
 the conventional PR `(0, 1)` endpoint is omitted from display, without changing AP.
-Assay ablation and oncogene rank-recovery plots are not part of this workflow.
+These experiments use realizations of the four seed patterns, not unseen pattern
+families. Assay ablation is not part of the simulation workflow.
 
 ### Compare noise levels
 
@@ -303,11 +316,11 @@ uv run python scripts/simulation/run_benchmarks.py
 uv run python scripts/simulation/plot_benchmarks.py
 ```
 
-`simulation_benchmarks.png/.pdf` now shows ROC AUC and average precision versus
-noise, with one line per feature method. ROC and PR figures show one panel per
+`simulation_benchmarks.png/.pdf` shows normalized LOOCV recovery area and average precision versus
+noise, with one line per feature method. LOOCV and PR figures show one panel per
 noise level. Optional `--models ...` comparisons get the same combined views.
 The CSVs retain their filenames and include `epsilon_std` to distinguish levels;
-predictions and ROC/PR curves are evaluated separately at each level.
+predictions, held-out ranks, and LOOCV/PR curves are evaluated separately at each level.
 
 Generation writes `epsilon_<value>/positive/` and `epsilon_<value>/negative/`
 under the feature directory, plus `simulation_manifest.json` identifying the
