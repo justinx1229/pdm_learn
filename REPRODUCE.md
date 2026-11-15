@@ -258,6 +258,13 @@ uv run python scripts/simulation/run_benchmarks.py
 uv run python scripts/simulation/plot_benchmarks.py
 ```
 
+To explore smoother PDM maps, pass `--pdm-sigma 0.6` to `make_features.py`.
+The bandwidth must be finite and positive; the default remains `0.1`.
+For `reproduce.py`, set `simulation.pdm_sigma` in the workflow JSON.
+The chosen bandwidth is saved in `simulation_manifest.json` and affects only
+PDM features. Use separate output directories for bandwidth comparisons, and
+validate a chosen bandwidth on independent simulation seeds before reporting gains.
+
 The default directories are `runs/simulation/features/` and
 `runs/simulation/results/`. Benchmarking writes `simulation_benchmarks.csv`,
 `simulation_cv_predictions.csv`, `simulation_loocv_curve.csv`,

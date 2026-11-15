@@ -73,11 +73,13 @@ class ReproductionScriptTests(unittest.TestCase):
         settings = run.call_args.args[1]
         self.assertEqual(settings["epsilon_std"], [0.5, 1.0, 2.0])
         self.assertEqual(settings["model"], "xgboost")
+        settings["pdm_sigma"] = 0.6
         with patch.object(script, "_run") as execute:
             script.run_simulation(Path("unused"), settings)
         command = execute.call_args_list[0].args[0]
         index = command.index("--epsilon-std")
         self.assertEqual(command[index + 1:index + 4], ["0.5", "1.0", "2.0"])
+        self.assertEqual(command[command.index("--pdm-sigma") + 1], "0.6")
         benchmark = execute.call_args_list[1].args[0]
         self.assertEqual(benchmark[benchmark.index("--model") + 1], "xgboost")
         self.assertEqual(benchmark[benchmark.index("--loocv-trials") + 1], "25")

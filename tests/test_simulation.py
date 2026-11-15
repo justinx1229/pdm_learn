@@ -240,13 +240,39 @@ def test_simulation_noise_sweep_keeps_levels_separate_and_folds_matched(tmp_path
     assert all((results / name).read_bytes() == value for name, value in before.items())
 
 
-@pytest.mark.parametrize("epsilon", ["-1", "nan", "inf"])
-def test_simulation_rejects_invalid_noise_levels(tmp_path, epsilon):
+def test_simulation_bandwidth_changes_only_pdm_features(tmp_path):
+    baseline, smooth = tmp_path / "baseline", tmp_path / "smooth"
+    generation = ("--positive-repeats", 1, "--negative-repeats", 1)
+    run_simulation_script("make_features.py", "--output-dir", baseline, *generation)
+    run_simulation_script("make_features.py", "--output-dir", smooth,
+                          "--pdm-sigma", 0.6, *generation)
+    for directory, sigma in ((baseline, 0.1), (smooth, 0.6)):
+        manifest = json.loads((directory / "simulation_manifest.json").read_text())
+        assert manifest["pdm_sigma"] == sigma
+    for label in ("positive", "negative"):
+        for method in ("pearson", "spearman", "mi", "bicor"):
+            assert (baseline / label / f"{method}.csv").read_bytes() == (
+                smooth / label / f"{method}.csv"
+            ).read_bytes()
+        original = pd.read_csv(baseline / label / "pdm.csv").to_numpy()
+        smoothed = pd.read_csv(smooth / label / "pdm.csv").to_numpy()
+        assert original.shape == smoothed.shape == (4, 49)
+        assert np.isfinite(smoothed).all()
+        assert not np.allclose(original, smoothed)
+        # Smoothing preserves the total mass of each density map.
+        np.testing.assert_allclose((np.exp(smoothed) - 1 / 49).sum(axis=1), 1.0)
+
+
+@pytest.mark.parametrize("flag, value, message", [
+    *(('--epsilon-std', value, 'finite and non-negative') for value in ('-1', 'nan', 'inf')),
+    *(('--pdm-sigma', value, 'finite and positive') for value in ('0', '-1', 'nan', 'inf')),
+])
+def test_simulation_rejects_invalid_noise_or_bandwidth(tmp_path, flag, value, message):
     output = tmp_path / "features"
     result = run_simulation_script("make_features.py", "--output-dir", output,
-                                   "--epsilon-std", epsilon, check=False)
+                                   flag, value, check=False)
     assert result.returncode != 0
-    assert "finite and non-negative" in result.stderr
+    assert message in result.stderr
     assert not output.exists()
 
 

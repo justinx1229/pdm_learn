@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--epsilon-std", type=float, nargs="+", default=[2.0],
                         help="One or more noise standard deviations.")
+    parser.add_argument("--pdm-sigma", type=float, default=0.6,
+                        help="PDM kernel bandwidth in standardized units (default: 0.1).")
     parser.add_argument(
         "--positive-repeats",
         type=int,
@@ -133,7 +135,7 @@ def make_features(args, epsilon, output_dir):
             centers=centers,
             repeats=repeats,
             noise_scale=epsilon,
-            sigma=0.1,
+            sigma=args.pdm_sigma,
             simulated_pairs=pairs,
         ).to_csv(directory / "pdm.csv", index=False)
         _scalar_features(
@@ -151,6 +153,8 @@ def main() -> None:
     args = parse_args()
     if args.positive_repeats < 1 or args.negative_repeats < 1:
         raise ValueError("positive_repeats and negative_repeats must be positive integers.")
+    if not np.isfinite(args.pdm_sigma) or args.pdm_sigma <= 0:
+        raise ValueError("pdm-sigma must be finite and positive.")
     epsilons = sorted(set(args.epsilon_std))
     if any(not np.isfinite(value) or value < 0 for value in epsilons):
         raise ValueError("epsilon-std values must be finite and non-negative.")
@@ -158,7 +162,7 @@ def main() -> None:
         directory = args.output_dir / f"epsilon_{epsilon}" if len(epsilons) > 1 else args.output_dir
         # Reuse random draws and permutations across noise levels for a paired comparison.
         make_features(args, epsilon, directory)
-    manifest = {"epsilon_stds": epsilons, "seed": args.seed,
+    manifest = {"epsilon_stds": epsilons, "seed": args.seed, "pdm_sigma": args.pdm_sigma,
                 "positive_repeats": args.positive_repeats,
                 "negative_repeats": args.negative_repeats}
     (args.output_dir / "simulation_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

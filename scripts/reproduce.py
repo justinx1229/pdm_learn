@@ -206,6 +206,8 @@ def run_simulation(output_dir: Path, settings: dict[str, object]) -> None:
             str(features),
             "--epsilon-std",
             *map(str, epsilons),
+            "--pdm-sigma",
+            str(settings.get("pdm_sigma", 0.1)),
             "--positive-repeats",
             str(settings["positive_repeats"]),
             "--negative-repeats",
