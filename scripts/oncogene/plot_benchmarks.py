@@ -140,7 +140,7 @@ def save_ks_heatmap(
 
     # The diagonal is unused: omit its empty final row and column.
     rows, columns = ROW_ORDER[:-1], COLUMN_ORDER[:-1]
-    figure = plt.figure(figsize=(7.2, 6))
+    figure = plt.figure(figsize=(8, 6.6))
     grid = figure.add_gridspec(
         len(rows),
         len(columns),
@@ -166,6 +166,13 @@ def save_ks_heatmap(
             axis.grid(False)
             axis.set_xticks([])
             axis.set_yticks([])
+            if row == 0:
+                axis.set_xticks([0, matrix.shape[1] - 1], ["Low", "High"])
+                axis.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
+            if column == 0:
+                labels = ["Mut.", "WT"] if left == "gene_mut" else ["High", "Low"]
+                axis.set_yticks([0, matrix.shape[0] - 1], labels)
+            axis.tick_params(axis="both", labelsize=7, length=0, pad=2)
             for spine in axis.spines.values():
                 spine.set_visible(False)
 
@@ -173,7 +180,7 @@ def save_ks_heatmap(
     for row, name in enumerate(rows):
         position = axes[row][0].get_position()
         figure.text(
-            0.17,
+            0.135,
             (position.y0 + position.y1) / 2,
             DISPLAY_NAMES[name],
             ha="right",
@@ -184,7 +191,7 @@ def save_ks_heatmap(
         position = axes[0][column].get_position()
         figure.text(
             (position.x0 + position.x1) / 2,
-            0.81,
+            0.84,
             DISPLAY_NAMES[name],
             ha="center",
             va="bottom",
@@ -309,7 +316,7 @@ def save_classification_curve(table, output_path, *, kind="pr", pdf_output_path=
 
 
 def save_ablation_plot(table, output_path, *, pdf_output_path=None):
-    """Pair assay inclusion cells with a zoomed recovery-area dot plot."""
+    """Pair assay inclusion cells with zoomed horizontal recovery-area bars."""
     assays = ("gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR")
     figure, (matrix, scores) = plt.subplots(
         1, 2, figsize=(8, 7), sharey=True, layout="constrained",
@@ -331,7 +338,7 @@ def save_ablation_plot(table, output_path, *, pdf_output_path=None):
     matrix.legend(handles=[Patch(color=used_color, label="Used"),
                            Patch(color=unused_color, label="Omitted")],
                   loc="upper left", bbox_to_anchor=(0, -0.02), ncol=2, frameon=False)
-    scores.scatter(table.loocv_area, np.arange(len(table)), s=45, color=used_color, zorder=3)
+    scores.barh(np.arange(len(table)), table.loocv_area, height=0.75, color=used_color)
     for row, area in enumerate(table.loocv_area):
         scores.annotate(f"{area:.3f}", (area, row), xytext=(7, 0),
                         textcoords="offset points", va="center", fontsize=9,

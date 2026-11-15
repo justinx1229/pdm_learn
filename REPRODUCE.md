@@ -193,7 +193,7 @@ full PDM table. Feature selection stays inside each training trial or fold.
 | --- | --- | --- |
 | `loocv` | `loocv_curve.csv`, `loocv_held_out_ranks.csv` | Feature-method recovery curves |
 | `models` | `model_loocv_curve.csv`, `model_loocv_held_out_ranks.csv`, `model_benchmarks.csv` | PDM classifier recovery curves |
-| `ablation` | `ablation.csv`, `ablation_held_out_ranks.csv` | Assay inclusion matrix with recovery-area dots |
+| `ablation` | `ablation.csv`, `ablation_held_out_ranks.csv` | Assay inclusion matrix with horizontal recovery-area bars |
 | `pr` or `labeled` | `cv_predictions.csv`, `pr_curve.csv`, `roc_curve.csv`, `method_benchmarks.csv` | PR, ROC, and metric summary |
 
 `models` uses the five supported classifiers: logistic regression, random forest,
@@ -211,7 +211,7 @@ inside the calibration folds. SVM scores can differ from older runs using
 
 Method and classifier curves show the number of recovered oncogenes by default;
 use `plot_benchmarks.py --recovery-scale fraction` for fractions. Their legends
-report normalized **rank-recovery area**, not ROC AUC. The ablation dots report
+report normalized **rank-recovery area**, not ROC AUC. The ablation bars report
 the same rank-recovery area on a zoomed axis, with the all-assay score marked
 as a dashed reference. Metric-summary panels also use separate scales fitted
 to their observed values. Plots use Matplotlib's bundled seaborn white-grid theme.
