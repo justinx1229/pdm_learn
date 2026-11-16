@@ -19,7 +19,7 @@ def _heatmap_script():
 
 
 class OncogeneKsHeatmapTests(unittest.TestCase):
-    def test_writes_png_and_pdf_for_all_pdm_feature_blocks(self) -> None:
+    def test_writes_only_png_for_all_pdm_feature_blocks(self) -> None:
         script = _heatmap_script()
         rows = []
         index = 0
@@ -40,11 +40,9 @@ class OncogeneKsHeatmapTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "oncogene_ks_heatmap.png"
-            pdf_output = output.with_suffix(".pdf")
-            script.save_ks_heatmap(table, output, pdf_output_path=pdf_output)
+            script.save_ks_heatmap(table, output)
 
             self.assertTrue(output.is_file())
             self.assertGreater(output.stat().st_size, 0)
-            self.assertTrue(pdf_output.is_file())
-            self.assertGreater(pdf_output.stat().st_size, 0)
+            self.assertEqual(list(Path(directory).iterdir()), [output])
             np.testing.assert_equal(len(table), 350)

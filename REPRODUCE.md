@@ -155,7 +155,7 @@ Both benchmarks retain the existing model, feature selection, and random-seed
 options. The old prediction flags `--loocv` and `--loocv-methods` are replaced
 by `run_benchmarks.py --benchmarks loocv --methods ...`.
 
-`plot_benchmarks.py` reads existing results and writes PNG and PDF files to
+`plot_benchmarks.py` reads existing results and writes PNG files to
 `RESULTS_DIR/figures/`. By default it plots all available benchmark
 results, reporting missing inputs. Explicitly selected plots require their
 source CSVs. To plot a chosen run:
@@ -234,7 +234,7 @@ Model comparison and ablation are opt-in because they rerun LOOCV many times:
 approximately `(number of methods + number of models + 16) × positive genes ×
 loocv-trials` model fits for the full suite. Use small fixtures and fewer trials
 for a pipeline check; use adequate trials for the paper results. Plotting alone
-never fits models and exports both 300-dpi PNG and PDF with embedded TrueType fonts.
+never fits models and exports 300-dpi PNG figures.
 
 For a custom run, pass the same `--feature-dir`, `--results-dir`, and
 `--label-name` to prediction and benchmarking, and the matching `--results-dir`
@@ -270,7 +270,7 @@ The default directories are `runs/simulation/features/` and
 `simulation_cv_predictions.csv`, `simulation_loocv_curve.csv`,
 `simulation_loocv_held_out_ranks.csv`, and
 `simulation_pr_curve.csv`. Plotting reads those CSVs and exports a metric summary,
-LOOCV recovery, and PR as PNG/PDF files under `RESULTS_DIR/figures/`. It never fits models.
+LOOCV recovery, and PR as PNG files under `RESULTS_DIR/figures/`. It never fits models.
 Rerun benchmarking to replace older ROC-based summaries; existing ROC files are
 obsolete and are ignored by the plotting script.
 `reproduce.py simulation` generates features and benchmarks; plotting is a separate step.
@@ -288,7 +288,20 @@ figures. `--model` selects the classifier for feature-method comparisons (defaul
 `--methods pdm pearson` selects feature methods. Existing fold count, feature
 selection, and random-seed options remain available. Use `--feature-dir` and
 `--results-dir` for another run; plotting accepts `--results-dir`, `--output-dir`,
-and `--plots summary loocv pr models model-loocv model-pr` (default: all available).
+and `--plots patterns summary loocv pr models model-loocv model-pr` (default: all available).
+
+The `patterns` figure shows the four seed associations in a 2×2 scatter layout,
+with one PNG per noise level. It recreates the first positive realization
+using the seed and noise levels in `RESULTS_DIR/../features/simulation_manifest.json`.
+Points are standardized but shown before clipping to the PDM grid. Use
+`--feature-dir` for another manifest location, or choose noise levels explicitly:
+
+```bash
+uv run python scripts/simulation/plot_benchmarks.py --plots patterns --epsilon-std 0.5
+```
+
+This writes `simulation_patterns_epsilon_0.5.png` in the figures directory.
+`--seed` overrides the manifest seed (or the fallback of 42 without a manifest).
 
 Feature CSVs must come from the same generation run: rows correspond by position.
 The benchmark requires matching positive/negative row counts and keeps only rows
@@ -323,7 +336,7 @@ uv run python scripts/simulation/run_benchmarks.py
 uv run python scripts/simulation/plot_benchmarks.py
 ```
 
-`simulation_benchmarks.png/.pdf` shows normalized LOOCV recovery area and average precision versus
+`simulation_benchmarks.png` shows normalized LOOCV recovery area and average precision versus
 noise, with one line per feature method. LOOCV and PR figures show one panel per
 noise level. Optional `--models ...` comparisons get the same combined views.
 The CSVs retain their filenames and include `epsilon_std` to distinguish levels;

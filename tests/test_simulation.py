@@ -154,8 +154,10 @@ def test_simulation_exports_matched_predictions_and_plots_without_refitting(tmp_
     run_simulation_script("plot_benchmarks.py", "--results-dir", results)
     assert all((results / name).read_bytes() == content for name, content in before.items())
     assert {path.name for path in (results / "figures").iterdir()} == {
-        f"simulation_{prefix}{suffix}.{extension}" for prefix in ("", "model_")
-        for suffix in ("benchmarks", "loocv", "pr") for extension in ("png", "pdf")
+        f"simulation_{prefix}{suffix}.png" for prefix in ("", "model_")
+        for suffix in ("benchmarks", "loocv", "pr")
+    } | {
+        "simulation_patterns_epsilon_2.png"
     }
     assert all(path.stat().st_size > 0 for path in (results / "figures").iterdir())
 
@@ -189,6 +191,35 @@ def test_simulation_explicit_plot_requires_saved_input(tmp_path):
     assert result.returncode != 0
     assert "simulation_pr_curve.csv" in result.stderr
     assert not (tmp_path / "figures").exists()
+
+
+def test_simulation_plot_skips_obsolete_classifier_results(tmp_path):
+    pd.DataFrame({"method": ["PDM"], "loocv_area": [0.8], "average_precision": [0.6]}).to_csv(
+        tmp_path / "simulation_benchmarks.csv", index=False
+    )
+    pd.DataFrame({"model": ["svm"], "roc_auc": [0.9], "average_precision": [0.7]}).to_csv(
+        tmp_path / "simulation_model_benchmarks.csv", index=False
+    )
+    # Even a readable old PR curve must not be mixed with the current evaluation.
+    pd.DataFrame({"model": ["svm"], "recall": [1.0], "precision": [0.5],
+                  "threshold": [0.0], "average_precision": [0.7], "prevalence": [0.5]}).to_csv(
+        tmp_path / "simulation_model_pr_curve.csv", index=False
+    )
+    before = {path.name: path.read_bytes() for path in tmp_path.glob("*.csv")}
+    result = run_simulation_script("plot_benchmarks.py", "--results-dir", tmp_path)
+    assert "Skipping models:" in result.stdout
+    assert "Skipping model-pr:" in result.stdout
+    assert "obsolete ROC results" in result.stdout
+    assert {path.name for path in (tmp_path / "figures").iterdir()} == {
+        "simulation_benchmarks.png"
+    }
+    for plot in ("models", "model-pr"):
+        result = run_simulation_script("plot_benchmarks.py", "--results-dir", tmp_path,
+                                      "--plots", plot, check=False)
+        assert result.returncode != 0
+        assert "loocv_area is missing" in result.stderr
+        assert "run_benchmarks.py with --models" in result.stderr
+    assert all((tmp_path / name).read_bytes() == content for name, content in before.items())
 
 
 def test_simulation_noise_sweep_keeps_levels_separate_and_folds_matched(tmp_path):
@@ -235,8 +266,8 @@ def test_simulation_noise_sweep_keeps_levels_separate_and_folds_matched(tmp_path
             assert set(curves.epsilon_std) == {0, 0.5, 2}
     before = {path.name: path.read_bytes() for path in results.iterdir()}
     run_simulation_script("plot_benchmarks.py", "--results-dir", results)
-    assert len(list((results / "figures").glob("*.png"))) == 6
-    assert len(list((results / "figures").glob("*.pdf"))) == 6
+    assert len(list((results / "figures").glob("*.png"))) == 9
+    assert not list((results / "figures").glob("*.pdf"))
     assert all((results / name).read_bytes() == value for name, value in before.items())
 
 

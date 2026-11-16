@@ -220,7 +220,7 @@ The oncogene workflow has four entry points in `scripts/oncogene/`:
 | `make_features.py` | Build PDM and scalar feature tables |
 | `run_predictions.py` | Write candidate rankings |
 | `run_benchmarks.py` | Write KS, recovery, ablation, and cross-validation CSVs |
-| `plot_benchmarks.py` | Read saved CSVs and export PNG/PDF figures |
+| `plot_benchmarks.py` | Read saved CSVs and export PNG figures |
 
 Benchmarking and plotting are separate, explicit steps; the oncogene
 `reproduce.py` workflow runs feature generation and prediction only.

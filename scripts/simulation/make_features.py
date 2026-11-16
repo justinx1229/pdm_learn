@@ -8,15 +8,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.integrate import cumulative_trapezoid
 from scipy.stats import pearsonr, spearmanr
 
 from pdm_learn.features import bicor, compute_mutual_information
 from pdm_learn.simulation import (
     build_density_dataset,
     build_metric_dataset,
+    build_positive_base,
     collect_simulated_pairs,
-    standardize_pair,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -40,40 +39,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--negative-repeats", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
-
-
-def _arc_length_axis(
-    derivative,
-    start: float,
-    stop: float,
-    *,
-    count: int,
-) -> np.ndarray:
-    """Sample a curve's input axis at approximately equal arc-length intervals."""
-    grid = np.linspace(start, stop, max(10_000, count * 20))
-    speed = np.sqrt(1.0 + np.square(derivative(grid)))
-    arc_length = cumulative_trapezoid(speed, grid, initial=0.0)
-    targets = np.linspace(0.0, arc_length[-1], count)
-    return np.interp(targets, arc_length, grid)
-
-
-def build_positive_base() -> pd.DataFrame:
-    """Return the standardized seed associations used by the original benchmark."""
-    linear = np.linspace(-1.0, 1.0, 500)
-    quadratic = _arc_length_axis(lambda values: 2.0 * values, -1.0, 1.0, count=500)
-    sinusoid = _arc_length_axis(np.cos, -np.pi, np.pi, count=500)
-    constant = np.linspace(0.0, 1.0, 251)
-    constant_x = np.append(constant, np.zeros_like(constant[1:-1]))
-    constant_y = np.append(np.zeros_like(constant), constant[1:-1])
-
-    pairs = (
-        (linear, linear),
-        (quadratic, quadratic**2),
-        (sinusoid, np.sin(sinusoid)),
-        (constant_x, constant_y),
-    )
-    rows = [values for x, y in pairs for values in standardize_pair(x, y)]
-    return pd.DataFrame(rows)
 
 
 def _scalar_features(

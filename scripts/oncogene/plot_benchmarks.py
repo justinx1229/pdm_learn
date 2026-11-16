@@ -27,7 +27,6 @@ plt.rcParams.update({
     "axes.spines.top": False, "axes.spines.right": False,
     "axes.edgecolor": "0.75", "axes.linewidth": 0.7,
     "grid.color": "0.9", "grid.linewidth": 0.6, "axes.axisbelow": True,
-    "pdf.fonttype": 42, "ps.fonttype": 42,
 })
 COLORS = {"PDM": "#0072B2", "Pearson": "#E69F00", "Spearman": "#009E73",
           "MutualInfo": "#D55E00", "Bicor": "#CC79A7"}
@@ -46,14 +45,11 @@ def _score_limits(values, *, start_at_zero=False):
     return (0 if start_at_zero else lower), upper
 
 
-def _save_plot(figure, output_path: Path, pdf_output_path: Path | None = None) -> None:
-    """Save paper figures as PNG and optional PDF, then release the figure."""
+def _save_plot(figure, output_path: Path) -> None:
+    """Save paper figures as PNG, then release the figure."""
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(output_path, dpi=300, bbox_inches="tight")
-        if pdf_output_path is not None:
-            pdf_output_path.parent.mkdir(parents=True, exist_ok=True)
-            figure.savefig(pdf_output_path, bbox_inches="tight")
     finally:
         plt.close(figure)
 
@@ -126,9 +122,8 @@ def save_ks_heatmap(
     vmax: float = 0.0,
     cmap: str = "gist_heat_r",
     title: str = "Oncogene PDM feature differences",
-    pdf_output_path: Path | None = None,
 ) -> None:
-    """Write a shared-scale PDM KS block heatmap as PNG and optional PDF."""
+    """Write a shared-scale PDM KS block heatmap as PNG."""
     blocks = _feature_values(table, value_column)
     finite_values = np.concatenate([matrix[np.isfinite(matrix)] for matrix in blocks.values()])
     if not len(finite_values):
@@ -204,14 +199,13 @@ def save_ks_heatmap(
     colorbar = figure.colorbar(image, cax=colorbar_axis)
     colorbar.set_label(r"$\log_{10}$ KS p-value")
     figure.suptitle(title, y=0.95)
-    _save_plot(figure, output_path, pdf_output_path)
+    _save_plot(figure, output_path)
 
 
 def save_loocv_plot(
     curves: pd.DataFrame,
     output_path: Path,
     *,
-    pdf_output_path: Path | None = None,
     group: str = "method",
     recovery_scale: str = "count",
 ) -> None:
@@ -241,14 +235,12 @@ def save_loocv_plot(
     if recovery_scale == "count":
         axis.yaxis.set_major_locator(MaxNLocator(integer=True))
     axis.legend(title="LOOCV rank recovery", frameon=False, loc="lower right", fontsize=9)
-    _save_plot(figure, output_path, pdf_output_path)
+    _save_plot(figure, output_path)
 
 
 def save_labeled_plot(
     table: pd.DataFrame,
     output_path: Path,
-    *,
-    pdf_output_path: Path | None = None,
 ) -> None:
     """Plot saved ROC AUC and AP summaries, without inventing fold error bars."""
     metrics = ("roc_auc", "average_precision")
@@ -271,7 +263,7 @@ def save_labeled_plot(
         axis.tick_params(axis="x", labelrotation=30)
         axis.spines[["top", "right"]].set_visible(False)
     figure.suptitle(_comparison_title(table))
-    _save_plot(figure, output_path, pdf_output_path)
+    _save_plot(figure, output_path)
 
 
 def _comparison_title(table):
@@ -280,7 +272,7 @@ def _comparison_title(table):
     return "Oncogenes vs. explicit negative controls"
 
 
-def save_classification_curve(table, output_path, *, kind="pr", pdf_output_path=None):
+def save_classification_curve(table, output_path, *, kind="pr"):
     """Display pooled out-of-fold curves with a prevalence/chance reference."""
     figure, axis = plt.subplots(figsize=(6.4, 4.8), layout="constrained")
     if kind == "pr":
@@ -312,10 +304,10 @@ def save_classification_curve(table, output_path, *, kind="pr", pdf_output_path=
                  title="ROC\n" + _comparison_title(table), ylim=(0, 1.02))
     axis.set_xlim(0, 1)
     axis.legend(frameon=False, fontsize=9, loc="best")
-    _save_plot(figure, output_path, pdf_output_path)
+    _save_plot(figure, output_path)
 
 
-def save_ablation_plot(table, output_path, *, pdf_output_path=None):
+def save_ablation_plot(table, output_path):
     """Pair assay inclusion cells with zoomed horizontal recovery-area bars."""
     assays = ("gene_exp", "copy_num", "shRNA", "gene_mut", "CRISPR")
     figure, (matrix, scores) = plt.subplots(
@@ -355,7 +347,7 @@ def save_ablation_plot(table, output_path, *, pdf_output_path=None):
     scores.tick_params(axis="y", which="both", left=False)
     scores.spines["left"].set_visible(False)
     figure.suptitle("Assay ablation · PDM", fontsize=12)
-    _save_plot(figure, output_path, pdf_output_path)
+    _save_plot(figure, output_path)
 
 
 # Add a plot function above, then register (input CSV suffix, output suffix, function).
@@ -409,8 +401,8 @@ def main() -> None:
         options = {"vmin": args.vmin, "vmax": args.vmax, "cmap": args.cmap} if name == "ks" else {}
         if name in ("loocv", "models"):
             options["recovery_scale"] = args.recovery_scale
-        plot(pd.read_csv(source), output, pdf_output_path=output.with_suffix(".pdf"), **options)
-        print(f"{name}: {output} and {output.with_suffix('.pdf')}")
+        plot(pd.read_csv(source), output, **options)
+        print(f"{name}: {output}")
         written += 1
     if not written:
         raise FileNotFoundError(f"No plot inputs found in {args.results_dir}.")

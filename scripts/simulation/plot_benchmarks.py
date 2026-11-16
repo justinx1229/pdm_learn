@@ -1,8 +1,9 @@
-"""Plot saved simulation benchmarks as PNG/PDF figures; no model fitting."""
+"""Plot simulation patterns and saved benchmarks as PNG figures; no model fitting."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import tempfile
 from functools import partial
@@ -17,13 +18,15 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
+from pdm_learn.simulation import build_positive_base, collect_simulated_pairs
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 plt.style.use("seaborn-v0_8-whitegrid")
 plt.rcParams.update({
     "font.size": 10, "axes.titlesize": 12, "axes.labelsize": 11,
     "axes.spines.top": False, "axes.spines.right": False,
     "axes.edgecolor": "0.75", "grid.color": "0.9", "grid.linewidth": 0.6,
-    "axes.axisbelow": True, "pdf.fonttype": 42, "ps.fonttype": 42,
+    "axes.axisbelow": True,
 })
 NAMES = {
     "PDM": "PDM", "PEARSON": "Pearson", "SPEARMAN": "Spearman", "MI": "Mutual information",
@@ -48,10 +51,27 @@ def _score_limits(values, *, start_at_zero=False):
 def _save(figure, output_path):
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
-        figure.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+        figure.savefig(f"{output_path}.png", dpi=300, bbox_inches="tight")
     finally:
         plt.close(figure)
+
+
+def save_patterns(epsilon, seed, output_path):
+    """Show the first realization of each pattern, standardized but not clipped."""
+    pairs = collect_simulated_pairs(
+        build_positive_base(), repeats=1, noise_scale=epsilon, rng=np.random.default_rng(seed)
+    )
+    figure, axes = plt.subplots(2, 2, figsize=(7, 7), layout="constrained")
+    names = ("Linear", "Quadratic", "Sinusoidal", "L-shaped")
+    for axis, (x, y), name in zip(axes.flat, pairs, names, strict=True):
+        axis.scatter(x, y, s=12, color="#1f77b4", alpha=0.8, linewidths=0)
+        axis.set(title=name, xlabel="Standardized X", ylabel="Standardized Y")
+        axis.set_box_aspect(1)
+        axis.grid(False)
+        axis.spines[["top", "right"]].set_visible(True)
+    figure.suptitle(f"Epsilon std: {epsilon:g}", fontsize=16)
+    figure.supxlabel("Before clipping to the PDM grid", fontsize=9, color="0.4")
+    _save(figure, output_path)
 
 
 def save_summary(table, output_path, *, group="method"):
@@ -175,14 +195,42 @@ def main() -> None:
     parser.add_argument("--results-dir", type=Path,
                         default=PROJECT_ROOT / "runs" / "simulation" / "results")
     parser.add_argument("--output-dir", type=Path, help="Defaults to RESULTS_DIR/figures.")
-    parser.add_argument("--plots", nargs="+", choices=("all", *PLOTS), default=["all"])
+    parser.add_argument("--feature-dir", type=Path,
+                        help="Manifest directory; defaults to RESULTS_DIR/../features.")
+    parser.add_argument("--epsilon-std", type=float, nargs="+",
+                        help="Noise levels for pattern figures; defaults to the manifest levels.")
+    parser.add_argument("--seed", type=int,
+                        help="Pattern seed; defaults to the manifest seed, or 42.")
+    parser.add_argument("--plots", nargs="+", choices=("all", "patterns", *PLOTS), default=["all"])
     args = parser.parse_args()
     if "all" in args.plots and len(args.plots) > 1:
         parser.error("Use 'all' alone or select individual plots.")
+    if args.epsilon_std is not None and any(
+        not np.isfinite(value) or value < 0 for value in args.epsilon_std
+    ):
+        parser.error("epsilon-std values must be finite and non-negative.")
     output_dir = args.output_dir or args.results_dir / "figures"
-    selected = PLOTS if args.plots == ["all"] else dict.fromkeys(args.plots)
+    selected = ("patterns", *PLOTS) if args.plots == ["all"] else args.plots
     written = 0
     for name in selected:
+        if name == "patterns":
+            feature_dir = args.feature_dir or args.results_dir.parent / "features"
+            manifest_path = feature_dir / "simulation_manifest.json"
+            manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+            epsilons = args.epsilon_std or manifest.get("epsilon_stds")
+            if not epsilons:
+                message = f"missing {manifest_path}; supply --feature-dir or --epsilon-std"
+                if args.plots != ["all"]:
+                    raise ValueError(message)
+                print(f"Skipping patterns: {message}")
+                continue
+            seed = args.seed if args.seed is not None else manifest.get("seed", 42)
+            for epsilon in sorted(set(epsilons)):
+                output = output_dir / f"simulation_patterns_epsilon_{epsilon:g}"
+                save_patterns(epsilon, seed, output)
+                print(f"patterns: {output}.png")
+                written += 1
+            continue
         suffix, plot = PLOTS[name]
         source = args.results_dir / f"simulation_{suffix}.csv"
         if not source.is_file():
@@ -190,12 +238,31 @@ def main() -> None:
                 raise FileNotFoundError(source)
             print(f"Skipping {name}: missing {source}")
             continue
+        # Old classifier results can remain after rerunning only the method comparison.
+        # Skip their curves too, rather than mixing old and current evaluations.
+        model_plot = name.startswith("model")
+        summary = args.results_dir / (
+            "simulation_model_benchmarks.csv" if model_plot else "simulation_benchmarks.csv"
+        )
+        if summary.is_file():
+            columns = pd.read_csv(summary, nrows=0).columns
+            if "roc_auc" in columns and "loocv_area" not in columns:
+                instruction = "Rerun scripts/simulation/run_benchmarks.py"
+                if model_plot:
+                    instruction += " with --models and your chosen classifiers"
+                message = (
+                    f"{summary} uses obsolete ROC results; loocv_area is missing. {instruction}."
+                )
+                if args.plots != ["all"]:
+                    raise ValueError(message)
+                print(f"Skipping {name}: {message}")
+                continue
         output = output_dir / source.stem.removesuffix("_curve")
         plot(pd.read_csv(source), output)
-        print(f"{name}: {output}.png and {output}.pdf")
+        print(f"{name}: {output}.png")
         written += 1
     if not written:
-        raise FileNotFoundError(f"No plot inputs found in {args.results_dir}.")
+        raise FileNotFoundError(f"No compatible plot inputs found in {args.results_dir}.")
 
 
 if __name__ == "__main__":

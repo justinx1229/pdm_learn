@@ -102,9 +102,8 @@ def test_oncogene_stages_write_only_their_own_outputs(tmp_path):
     assert all((results / name).read_bytes() == content for name, content in before_plot.items())
     plots = results / "figures"
     assert {path.name for path in plots.iterdir()} == {
-        f"test_{name}.{extension}"
+        f"test_{name}.png"
         for name in ("ks_heatmap", "loocv", "method_benchmarks", "pr", "roc")
-        for extension in ("png", "pdf")
     }
     assert all(path.stat().st_size > 0 for path in plots.iterdir())
 
